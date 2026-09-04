@@ -12,6 +12,8 @@ import { syncCourseTestStudents } from "@/sync/courseTestStudentSync";
 
 import { syncOmrPackage } from "@/sync/omrPackageSync";
 
+import { syncPendingOmrSubmissions } from "@/sync/omrSubmissionSync";
+
 export type FullSyncResult = {
   courseCount: number;
 
@@ -22,6 +24,10 @@ export type FullSyncResult = {
   omrPackagesSynced: number;
 
   omrPackagesFailed: number;
+
+  omrSubmissionBatchesSynced: number;
+  omrSubmissionsSynced: number;
+  omrSubmissionsFailed: number;
 };
 
 export async function performFullSync(token: string): Promise<FullSyncResult> {
@@ -111,6 +117,31 @@ export async function performFullSync(token: string): Promise<FullSyncResult> {
     }
   }
 
+  /*
+    |--------------------------------------------------------------------------
+    | Pending OMR Submissions
+    |--------------------------------------------------------------------------
+    |
+    | Upload only after normal reference-data synchronization. All scan data
+    | already exists safely in SQLite, so a network failure leaves it pending.
+    */
+
+  let omrSubmissionBatchesSynced = 0;
+  let omrSubmissionsSynced = 0;
+  let omrSubmissionsFailed = 0;
+
+  try {
+    const omrSubmissionSync = await syncPendingOmrSubmissions(token);
+
+    omrSubmissionBatchesSynced = omrSubmissionSync.batchCount;
+
+    omrSubmissionsSynced = omrSubmissionSync.syncedCount;
+
+    omrSubmissionsFailed = omrSubmissionSync.failedCount;
+  } catch (error) {
+    console.error("[OMR SUBMISSION SYNC] Failed:", error);
+  }
+
   return {
     courseCount: courses.length,
 
@@ -121,5 +152,9 @@ export async function performFullSync(token: string): Promise<FullSyncResult> {
     omrPackagesSynced,
 
     omrPackagesFailed,
+
+    omrSubmissionBatchesSynced,
+    omrSubmissionsSynced,
+    omrSubmissionsFailed,
   };
 }
