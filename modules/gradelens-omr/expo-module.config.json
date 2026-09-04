@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android", "web"],
+  "apple": {
+    "modules": ["GradeLensOmrModule"]
+  },
+  "android": {
+    "modules": ["com.gradelens.omr.GradeLensOmrModule"]
+  }
+}

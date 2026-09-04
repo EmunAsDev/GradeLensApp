@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
-    ActivityIndicator,
-    Alert,
-    FlatList,
-    RefreshControl,
-    StyleSheet,
-    Text,
-    View,
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  RefreshControl,
+  StyleSheet,
+  Text,
+  View,
 } from "react-native";
 
 import { Stack, useLocalSearchParams } from "expo-router";
@@ -19,8 +19,8 @@ import { useAuth } from "@/auth/AuthContext";
 import { getCourseTest } from "@/database/courseTestRepository";
 
 import {
-    getCourseTestStudents,
-    LocalCourseTestStudent,
+  getCourseTestStudents,
+  LocalCourseTestStudent,
 } from "@/database/courseTestStudentRepository";
 
 import { syncCourseTestStudents } from "@/sync/courseTestStudentSync";

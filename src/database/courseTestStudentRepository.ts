@@ -211,3 +211,124 @@ export async function getCourseTestStudents(
     [courseTestId, courseId],
   );
 }
+
+export async function getCourseTestStudentByStudentId(
+  courseTestId: number,
+  studentIdNo: string,
+): Promise<LocalCourseTestStudent | null> {
+  const db = await getDatabase();
+
+  const normalizedStudentIdNo = studentIdNo.trim();
+
+  if (!normalizedStudentIdNo) {
+    return null;
+  }
+
+  return await db.getFirstAsync<LocalCourseTestStudent>(
+    `
+            SELECT
+                students.std_id,
+                students.crs_id,
+
+                students.student_id_no,
+                students.name,
+
+                results.tentative_score,
+                results.final_score,
+
+                COALESCE(
+                    results.sync_status,
+                    'not_scanned'
+                ) AS sync_status,
+
+                students.synced_at
+                    AS student_synced_at,
+
+                results.synced_at
+                    AS result_synced_at
+
+            FROM course_tests AS course_test
+
+            INNER JOIN course_students AS students
+                ON students.crs_id =
+                    course_test.crs_id
+
+            LEFT JOIN course_test_results AS results
+                ON results.std_id =
+                    students.std_id
+
+                AND results.crs_tst_id =
+                    course_test.crs_tst_id
+
+            WHERE course_test.crs_tst_id =
+                ?
+
+                AND TRIM(students.student_id_no) =
+                    ?
+
+            LIMIT 1
+        `,
+    [courseTestId, normalizedStudentIdNo],
+  );
+}
+
+export async function saveTentativeCourseTestResult(
+  courseTestId: number,
+  studentId: number,
+  tentativeScore: number,
+): Promise<void> {
+  const db = await getDatabase();
+
+  const updatedAt = new Date().toISOString();
+
+  await db.runAsync(
+    `
+            INSERT INTO course_test_results (
+                crs_tst_id,
+                std_id,
+
+                tentative_score,
+                final_score,
+
+                sync_status,
+
+                updated_at,
+                synced_at
+            )
+
+            VALUES (
+                ?,
+                ?,
+
+                ?,
+                NULL,
+
+                'pending',
+
+                ?,
+                NULL
+            )
+
+            ON CONFLICT(
+                crs_tst_id,
+                std_id
+            )
+
+            DO UPDATE SET
+                tentative_score =
+                    excluded.tentative_score,
+
+                sync_status =
+                    CASE
+                        WHEN course_test_results.final_score IS NOT NULL
+                            THEN 'synced'
+
+                        ELSE 'pending'
+                    END,
+
+                updated_at =
+                    excluded.updated_at
+        `,
+    [courseTestId, studentId, tentativeScore, updatedAt],
+  );
+}

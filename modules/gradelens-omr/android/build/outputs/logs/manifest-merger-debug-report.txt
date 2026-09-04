@@ -1,0 +1,14 @@
+-- Merging decision tree log ---
+manifest
+ADDED from C:\Projects\GradeLensApp\modules\gradelens-omr\android\src\main\AndroidManifest.xml:1:1-2:12
+INJECTED from C:\Projects\GradeLensApp\modules\gradelens-omr\android\src\main\AndroidManifest.xml:1:1-2:12
+	package
+		INJECTED from C:\Projects\GradeLensApp\modules\gradelens-omr\android\src\main\AndroidManifest.xml
+uses-sdk
+INJECTED from C:\Projects\GradeLensApp\modules\gradelens-omr\android\src\main\AndroidManifest.xml reason: use-sdk injection requested
+INJECTED from C:\Projects\GradeLensApp\modules\gradelens-omr\android\src\main\AndroidManifest.xml
+INJECTED from C:\Projects\GradeLensApp\modules\gradelens-omr\android\src\main\AndroidManifest.xml
+	android:targetSdkVersion
+		INJECTED from C:\Projects\GradeLensApp\modules\gradelens-omr\android\src\main\AndroidManifest.xml
+	android:minSdkVersion
+		INJECTED from C:\Projects\GradeLensApp\modules\gradelens-omr\android\src\main\AndroidManifest.xml
