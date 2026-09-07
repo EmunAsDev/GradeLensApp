@@ -1,7 +1,6 @@
 import { randomUUID } from "react-native-quick-crypto";
 
 import {
-<<<<<<< HEAD
   uploadOmrBatch,
   type BatchSyncAnswers,
   type BatchSyncAnswerStatuses,
@@ -16,22 +15,6 @@ import {
   markOmrSubmissionFailed,
   markOmrSubmissionSynced,
   type ParsedLocalOmrSubmission,
-=======
-    uploadOmrBatch,
-    type BatchSyncAnswers,
-    type BatchSyncAnswerStatuses,
-    type BatchSyncRequestPayload,
-    type BatchSyncResponse,
-} from "@/api/batchSyncApi";
-
-import {
-    assignOmrBatchUuid,
-    getPendingOmrSubmissions,
-    markOmrBatchFailed,
-    markOmrSubmissionFailed,
-    markOmrSubmissionSynced,
-    type ParsedLocalOmrSubmission,
->>>>>>> 5e6ced85ab3217b727f5e3d2c9dbe6f8eff9633a
 } from "@/database/omrSubmissionRepository";
 
 export type PendingOmrSyncResult = {
@@ -214,7 +197,7 @@ async function prepareNextBatch(): Promise<{
   }
 
   const alreadyAssigned = pending.find(
-    (submission) => submission.batch_uuid !== null,
+    (submission: any) => submission.batch_uuid !== null,
   );
 
   if (alreadyAssigned?.batch_uuid) {

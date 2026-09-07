@@ -1,6 +1,5 @@
 import { apiRequest } from "@/api/client";
 
-<<<<<<< HEAD
 /*
 |--------------------------------------------------------------------------
 | Batch Sync API Contract
@@ -24,9 +23,6 @@ import { apiRequest } from "@/api/client";
 export type BatchSyncAnswers = Record<string, string[]>;
 
 // Question number (as string) -> interpreter status string for that question
-=======
-export type BatchSyncAnswers = Record<string, string[]>;
->>>>>>> 5e6ced85ab3217b727f5e3d2c9dbe6f8eff9633a
 export type BatchSyncAnswerStatuses = Record<string, string>;
 
 export type BatchSyncSubmissionPayload = {
@@ -56,15 +52,12 @@ export type BatchSyncRequestPayload = {
   submissions: BatchSyncSubmissionPayload[];
 };
 
-<<<<<<< HEAD
 /*
 |--------------------------------------------------------------------------
 | Response
 |--------------------------------------------------------------------------
 */
 
-=======
->>>>>>> 5e6ced85ab3217b727f5e3d2c9dbe6f8eff9633a
 export type BatchSyncResponseSubmission = {
   submission_uuid: string;
   sheet_uuid: string;
@@ -83,7 +76,6 @@ export type BatchSyncResponseSubmission = {
   processed_at: string | null;
 };
 
-<<<<<<< HEAD
 /*
  * The permanent, authoritative record from course_test_results. Matched
  * back to a local submission by crs_tst_id + (std_id OR student_id_no) -
@@ -91,8 +83,6 @@ export type BatchSyncResponseSubmission = {
  * preferred over BatchSyncResponseSubmission.final_score when both are
  * present.
  */
-=======
->>>>>>> 5e6ced85ab3217b727f5e3d2c9dbe6f8eff9633a
 export type BatchSyncCourseTestResult = {
   ctr_id?: number;
   crs_tst_id: number;
@@ -128,7 +118,6 @@ export type BatchSyncResponse = {
 
   submissions: BatchSyncResponseSubmission[];
 
-<<<<<<< HEAD
   // Optional: may be absent if Laravel defers grading to a queued job
   // rather than computing course_test_results synchronously in this
   // response.
@@ -141,11 +130,6 @@ export type BatchSyncResponse = {
 |--------------------------------------------------------------------------
 */
 
-=======
-  course_test_results?: BatchSyncCourseTestResult[];
-};
-
->>>>>>> 5e6ced85ab3217b727f5e3d2c9dbe6f8eff9633a
 export async function uploadOmrBatch(
   token: string,
   payload: BatchSyncRequestPayload,
