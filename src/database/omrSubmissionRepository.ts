@@ -648,3 +648,21 @@ export async function markOmrSubmissionSynced(
     }
   });
 }
+
+export async function countSyncedOmrSubmissions(): Promise<number> {
+  const db = await getDatabase();
+
+  const row = await db.getFirstAsync<{
+    total: number;
+  }>(
+    `
+      SELECT COUNT(*) AS total
+ 
+      FROM omr_submissions
+ 
+      WHERE sync_status = 'synced'
+    `,
+  );
+
+  return row?.total ?? 0;
+}

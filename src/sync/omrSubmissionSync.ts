@@ -1,20 +1,20 @@
 import { randomUUID } from "react-native-quick-crypto";
 
 import {
-    uploadOmrBatch,
-    type BatchSyncAnswers,
-    type BatchSyncAnswerStatuses,
-    type BatchSyncRequestPayload,
-    type BatchSyncResponse,
+  uploadOmrBatch,
+  type BatchSyncAnswers,
+  type BatchSyncAnswerStatuses,
+  type BatchSyncRequestPayload,
+  type BatchSyncResponse,
 } from "@/api/batchSyncApi";
 
 import {
-    assignOmrBatchUuid,
-    getPendingOmrSubmissions,
-    markOmrBatchFailed,
-    markOmrSubmissionFailed,
-    markOmrSubmissionSynced,
-    type ParsedLocalOmrSubmission,
+  assignOmrBatchUuid,
+  getPendingOmrSubmissions,
+  markOmrBatchFailed,
+  markOmrSubmissionFailed,
+  markOmrSubmissionSynced,
+  type ParsedLocalOmrSubmission,
 } from "@/database/omrSubmissionRepository";
 
 export type PendingOmrSyncResult = {
