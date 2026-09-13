@@ -20,6 +20,9 @@ import { getDeviceUuid } from "@/crypto/deviceKeyStorage";
 
 import { performFullSync } from "@/sync/fullSync";
 
+import { AppScreenHeader } from "@/../components/layout/AppScreenHeader";
+import { theme } from "@/../theme";
+
 export default function SettingsScreen() {
   const { token, employee, logout } = useAuth();
 
@@ -42,7 +45,7 @@ export default function SettingsScreen() {
   }, []);
 
   const handleSync = async () => {
-    if (!token) {
+    if (!token || !employee) {
       Alert.alert("Sync", "You are not currently authenticated.");
 
       return;
@@ -54,46 +57,72 @@ export default function SettingsScreen() {
 
     setIsSyncing(true);
 
-    setSyncStatus("Synchronizing with GradeLens...");
+    setSyncStatus("Updating offline GradeLens data...");
 
     try {
-      const result = await performFullSync(token);
+      const result = await performFullSync(token, employee.id);
+
+      if (result.status === "in_progress") {
+        setSyncStatus("Synchronization is already in progress.");
+
+        return;
+      }
+
+      if (result.status === "cooldown") {
+        const waitText = formatRemainingTime(result.remainingMs);
+
+        setSyncStatus(
+          `GradeLens was synchronized recently. Try again in ${waitText}.`,
+        );
+
+        Alert.alert(
+          "Recently Synchronized",
+          `Your offline data was updated recently. You can synchronize again in ${waitText}.`,
+        );
+
+        return;
+      }
+
+      const summary = result.data;
 
       /*
-                |--------------------------------------------------------------------------
-                | Reload Device UUID
-                |--------------------------------------------------------------------------
-                */
-
+       * Reload Device UUID
+       */
       const uuid = await getDeviceUuid();
 
       setDeviceUuid(uuid);
 
       setSyncStatus(
         `Sync complete. ` +
-          `${result.courseCount} course${
-            result.courseCount === 1 ? "" : "s"
+          `${summary.courseCount} course${
+            summary.courseCount === 1 ? "" : "s"
           }, ` +
-          `${result.omrPackagesSynced} OMR package${
-            result.omrPackagesSynced === 1 ? "" : "s"
+          `${summary.omrPackagesSynced} OMR package${
+            summary.omrPackagesSynced === 1 ? "" : "s"
           } synchronized.`,
       );
 
-      if (result.omrPackagesFailed > 0) {
+      const issueCount =
+        summary.courseTestsWithStudentsFailed + summary.omrPackagesFailed;
+
+      if (issueCount > 0) {
         Alert.alert(
           "Sync Completed With Issues",
-          `${result.omrPackagesSynced} OMR package(s) synchronized. ` +
-            `${result.omrPackagesFailed} package(s) could not be downloaded.`,
+          `${summary.courseTestsWithStudentsSynced} course-test roster(s) updated, ` +
+            `${summary.courseTestsWithStudentsFailed} roster(s) failed, ` +
+            `${summary.omrPackagesSynced} OMR package(s) updated, and ` +
+            `${summary.omrPackagesFailed} package(s) failed. ` +
+            `Existing offline data was preserved where updates failed.`,
         );
-      } else {
-        Alert.alert(
-          "Sync Complete",
-          "Courses, course tests, and OMR packages are now available offline.",
-        );
-      }
-    } catch (error) {
-      console.error("Full synchronization failed:", error);
 
+        return;
+      }
+
+      Alert.alert(
+        "Sync Complete",
+        "Courses, course tests, students, existing results, and OMR packages are updated for offline use.",
+      );
+    } catch (error) {
       if (error instanceof ApiError) {
         if (error.status === 401) {
           setSyncStatus("Your session has expired.");
@@ -107,6 +136,17 @@ export default function SettingsScreen() {
           setSyncStatus("Synchronization was not authorized.");
 
           Alert.alert("Sync Failed", error.message);
+
+          return;
+        }
+
+        if (error.status === 429) {
+          setSyncStatus("The server temporarily paused synchronization.");
+
+          Alert.alert(
+            "Sync Paused",
+            "GradeLens received too many requests. Your existing offline data is unchanged. Please try again later.",
+          );
 
           return;
         }
@@ -173,13 +213,11 @@ export default function SettingsScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Settings</Text>
-
-        <Text style={styles.subtitle}>
-          Account, device, and synchronization
-        </Text>
-      </View>
+      <AppScreenHeader
+        eyebrow="GradeLens"
+        title="Settings"
+        subtitle="Account, device, and synchronization."
+      />
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Profile</Text>
@@ -355,41 +393,27 @@ function InfoRow({ label, value }: InfoRowProps) {
   );
 }
 
+function formatRemainingTime(remainingMs: number): string {
+  const totalSeconds = Math.max(1, Math.ceil(remainingMs / 1000));
+
+  if (totalSeconds < 60) {
+    return `${totalSeconds} second${totalSeconds === 1 ? "" : "s"}`;
+  }
+
+  const minutes = Math.ceil(totalSeconds / 60);
+
+  return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+}
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
 
-    backgroundColor: "#f8fafc",
+    backgroundColor: theme.colors.background,
   },
 
   content: {
     paddingBottom: 40,
-  },
-
-  header: {
-    paddingTop: 58,
-
-    paddingHorizontal: 20,
-
-    paddingBottom: 20,
-
-    backgroundColor: "#ffffff",
-  },
-
-  title: {
-    fontSize: 28,
-
-    fontWeight: "700",
-
-    color: "#111827",
-  },
-
-  subtitle: {
-    marginTop: 4,
-
-    fontSize: 14,
-
-    color: "#6b7280",
   },
 
   section: {

@@ -2,33 +2,80 @@ import { Tabs } from "expo-router";
 
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
-function ScanTabButton(props: any) {
-  const { onPress, accessibilityState } = props;
+import { AppTabIcon } from "@/../components/navigation/AppTabIcon";
+import { theme } from "@/../theme";
 
-  const selected = accessibilityState?.selected;
+/*
+ * Custom button for normal tabs.
+ *
+ * We use our own Pressable so Android does not show the
+ * default circular ripple when a navigation item is pressed.
+ */
+function TabButton(props: any) {
+  const {
+    children,
+    onPress,
+    onLongPress,
+    accessibilityLabel,
+    accessibilityState,
+    testID,
+    style,
+  } = props;
 
   return (
-    <View style={styles.scanButtonWrapper}>
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      accessibilityState={accessibilityState}
+      testID={testID}
+      onPress={onPress}
+      onLongPress={onLongPress}
+      android_ripple={null}
+      style={({ pressed }) => [style, pressed && styles.tabButtonPressed]}
+    >
+      {children}
+    </Pressable>
+  );
+}
+
+/*
+ * Special raised Scan button.
+ *
+ * This remains circular because the circle is part of the
+ * GradeLens Scan button design, not the Android press ripple.
+ */
+function ScanTabButton(props: any) {
+  const { onPress, onLongPress, accessibilityState } = props;
+
+  const selected = Boolean(accessibilityState?.selected);
+
+  return (
+    <View style={styles.scanButtonSlot}>
       <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Scan answer sheets"
+        accessibilityState={accessibilityState}
         onPress={onPress}
+        onLongPress={onLongPress}
+        android_ripple={null}
         style={({ pressed }) => [
-          styles.scanButton,
-
-          selected && styles.scanButtonActive,
-
-          pressed && {
-            opacity: 0.85,
-          },
+          styles.scanTabButton,
+          pressed && styles.scanTabButtonPressed,
         ]}
       >
-        <View style={styles.scanIcon}>
-          <Text style={styles.scanIconText}>⌾</Text>
+        <View style={[styles.scanCircle, selected && styles.scanCircleActive]}>
+          <AppTabIcon
+            icon="scan"
+            color={theme.colors.textInverse}
+            focused
+            size={27}
+          />
         </View>
-      </Pressable>
 
-      <Text style={[styles.scanLabel, selected && styles.scanLabelActive]}>
-        Scan
-      </Text>
+        <Text style={[styles.scanLabel, selected && styles.scanLabelActive]}>
+          Scan
+        </Text>
+      </Pressable>
     </View>
   );
 }
@@ -39,28 +86,38 @@ export default function TabsLayout() {
       screenOptions={{
         headerShown: false,
 
-        tabBarActiveTintColor: "#a40c0c",
+        tabBarActiveTintColor: theme.colors.primary,
+        tabBarInactiveTintColor: theme.colors.textMuted,
 
-        tabBarInactiveTintColor: "#6b7280",
+        tabBarHideOnKeyboard: true,
+
+        /*
+         * Replace the default React Navigation tab button.
+         *
+         * This removes the Android circular ripple effect.
+         */
+        tabBarButton: (props) => <TabButton {...props} />,
 
         tabBarStyle: {
-          height: 70,
+          backgroundColor: theme.colors.surface,
+          borderTopWidth: StyleSheet.hairlineWidth,
+          borderTopColor: theme.colors.border,
+          elevation: 0,
+          shadowOpacity: 0,
+        },
 
-          paddingTop: 7,
-
-          paddingBottom: 8,
-
-          backgroundColor: "#ffffff",
-
-          borderTopWidth: 1,
-
-          borderTopColor: "#e5e7eb",
+        tabBarItemStyle: {
+          paddingTop: theme.spacing.xs,
         },
 
         tabBarLabelStyle: {
-          fontSize: 11,
+          marginTop: 1,
+          fontSize: theme.typography.label.fontSize,
+          fontWeight: theme.typography.label.fontWeight,
+        },
 
-          fontWeight: "600",
+        sceneStyle: {
+          backgroundColor: theme.colors.background,
         },
       }}
     >
@@ -69,16 +126,8 @@ export default function TabsLayout() {
         options={{
           title: "Home",
 
-          tabBarIcon: ({ color }) => (
-            <Text
-              style={{
-                fontSize: 20,
-
-                color,
-              }}
-            >
-              ⌂
-            </Text>
+          tabBarIcon: ({ color, focused }) => (
+            <AppTabIcon icon="home" color={color as string} focused={focused} />
           ),
         }}
       />
@@ -88,16 +137,12 @@ export default function TabsLayout() {
         options={{
           title: "Courses",
 
-          tabBarIcon: ({ color }) => (
-            <Text
-              style={{
-                fontSize: 19,
-
-                color,
-              }}
-            >
-              ▤
-            </Text>
+          tabBarIcon: ({ color, focused }) => (
+            <AppTabIcon
+              icon="courses"
+              color={color as string}
+              focused={focused}
+            />
           ),
         }}
       />
@@ -107,7 +152,11 @@ export default function TabsLayout() {
         options={{
           title: "Scan",
 
-          tabBarButton: ScanTabButton,
+          /*
+           * Override the normal tab button because Scan has
+           * its own raised circular button.
+           */
+          tabBarButton: (props) => <ScanTabButton {...props} />,
         }}
       />
 
@@ -116,16 +165,12 @@ export default function TabsLayout() {
         options={{
           title: "Batch",
 
-          tabBarIcon: ({ color }) => (
-            <Text
-              style={{
-                fontSize: 19,
-
-                color,
-              }}
-            >
-              ⇅
-            </Text>
+          tabBarIcon: ({ color, focused }) => (
+            <AppTabIcon
+              icon="batch"
+              color={color as string}
+              focused={focused}
+            />
           ),
         }}
       />
@@ -135,16 +180,12 @@ export default function TabsLayout() {
         options={{
           title: "Settings",
 
-          tabBarIcon: ({ color }) => (
-            <Text
-              style={{
-                fontSize: 19,
-
-                color,
-              }}
-            >
-              ⚙
-            </Text>
+          tabBarIcon: ({ color, focused }) => (
+            <AppTabIcon
+              icon="settings"
+              color={color as string}
+              focused={focused}
+            />
           ),
         }}
       />
@@ -153,77 +194,73 @@ export default function TabsLayout() {
 }
 
 const styles = StyleSheet.create({
-  scanButtonWrapper: {
-    flex: 1,
-
-    alignItems: "center",
-
-    justifyContent: "flex-start",
-
-    marginTop: -25,
+  /*
+   * Normal navigation tabs.
+   *
+   * Instead of a circular ripple, pressing a tab only gives
+   * a very small opacity response.
+   */
+  tabButtonPressed: {
+    opacity: 0.72,
   },
 
-  scanButton: {
-    width: 62,
+  /*
+   * Scan Tab
+   */
+  scanButtonSlot: {
+    flex: 1,
+    alignItems: "center",
+  },
 
-    height: 62,
+  scanTabButton: {
+    alignItems: "center",
+    justifyContent: "flex-start",
+    marginTop: -14,
+  },
 
-    borderRadius: 31,
+  scanTabButtonPressed: {
+    opacity: 0.82,
+  },
+
+  scanCircle: {
+    width: 56,
+    height: 56,
 
     alignItems: "center",
-
     justifyContent: "center",
 
-    borderWidth: 5,
+    borderWidth: 4,
+    borderColor: theme.colors.surface,
+    borderRadius: 28,
 
-    borderColor: "#ffffff",
-
-    backgroundColor: "#a40c0c",
+    backgroundColor: theme.colors.primary,
 
     shadowColor: "#000000",
 
     shadowOffset: {
       width: 0,
-
       height: 4,
     },
 
-    shadowOpacity: 0.2,
+    shadowOpacity: 0.16,
+    shadowRadius: 6,
 
-    shadowRadius: 5,
-
-    elevation: 8,
+    elevation: 7,
   },
 
-  scanButtonActive: {
-    backgroundColor: "#8d0a0a",
-  },
-
-  scanIcon: {
-    alignItems: "center",
-
-    justifyContent: "center",
-  },
-
-  scanIconText: {
-    fontSize: 30,
-
-    fontWeight: "700",
-
-    color: "#ffffff",
+  scanCircleActive: {
+    backgroundColor: theme.colors.primaryPressed,
   },
 
   scanLabel: {
     marginTop: 2,
 
-    fontSize: 11,
+    ...theme.typography.label,
 
-    fontWeight: "600",
-
-    color: "#6b7280",
+    color: theme.colors.textMuted,
   },
 
   scanLabelActive: {
-    color: "#a40c0c",
+    color: theme.colors.primary,
   },
 });

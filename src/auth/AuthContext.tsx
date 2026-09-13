@@ -17,7 +17,7 @@ import {
   saveAuthSession,
 } from "../auth/authStorage";
 
-import { ensureDeviceRegistered } from "@/crypto/deviceRegistration";
+import { performFullSync } from "@/sync/fullSync";
 
 type LoginResponse = {
   message: string;
@@ -159,21 +159,37 @@ export function AuthProvider({ children }: AuthProviderProps) {
       }),
     });
 
+    /*
+     * Authentication succeeds independently from reference-data sync.
+     *
+     * Save the session first so the teacher can enter GradeLens immediately.
+     */
     await saveAuthSession(response.token, response.employee);
 
     setToken(response.token);
 
     setEmployee(response.employee);
 
-    try {
-      await ensureDeviceRegistered(response.token);
-    } catch (error) {
-      console.error("Device registration failed:", error);
-    }
-
-    setToken(response.token);
-
-    setEmployee(response.employee);
+    /*
+     * Start the initial reference-data synchronization.
+     *
+     * This downloads/updates:
+     * - courses
+     * - course tests
+     * - students + existing final scores
+     * - encrypted OMR packages
+     *
+     * It intentionally does NOT submit scanned papers.
+     *
+     * The persisted employee-scoped cooldown prevents repeated logins or a
+     * Settings sync from immediately launching the same expensive full sync.
+     *
+     * A synchronization failure must not turn a valid Laravel login into a
+     * login failure. Settings can retry reference synchronization later.
+     */
+    void performFullSync(response.token, response.employee.id).catch(() => {
+      // Keep the authenticated local session.
+    });
   }, []);
 
   const logout = useCallback(async () => {

@@ -5,24 +5,14 @@ import { apiRequest } from "@/api/client";
 | Batch Sync API Contract
 |--------------------------------------------------------------------------
 |
-| Every field here was cross-checked against how omrSubmissionSync.ts
-| actually consumes this module (buildServerAnswers, buildAnswerStatuses,
-| toServerSubmission, applyBatchResponse, getOfficialResultForSubmission) -
-| no mismatches. This is the single source of truth for the wire format
-| between the app and the Laravel /batch-sync endpoint.
-|--------------------------------------------------------------------------
+| Mobile sends immutable local scan evidence to Laravel. Partial retries keep
+| the same batch_uuid and submission_uuid; only unresolved submissions need to
+| be included in a retry request.
+|
 */
 
-/*
-|--------------------------------------------------------------------------
-| Request
-|--------------------------------------------------------------------------
-*/
-
-// Question number (as string) -> shaded choice letters, e.g. {"15": ["C","D"], "22": []}
 export type BatchSyncAnswers = Record<string, string[]>;
 
-// Question number (as string) -> interpreter status string for that question
 export type BatchSyncAnswerStatuses = Record<string, string>;
 
 export type BatchSyncSubmissionPayload = {
@@ -35,7 +25,6 @@ export type BatchSyncSubmissionPayload = {
   answer_statuses: BatchSyncAnswerStatuses;
 
   tentative_score: number | null;
-
   requires_review: boolean;
 
   captured_at: string;
@@ -52,12 +41,6 @@ export type BatchSyncRequestPayload = {
   submissions: BatchSyncSubmissionPayload[];
 };
 
-/*
-|--------------------------------------------------------------------------
-| Response
-|--------------------------------------------------------------------------
-*/
-
 export type BatchSyncResponseSubmission = {
   submission_uuid: string;
   sheet_uuid: string;
@@ -71,20 +54,13 @@ export type BatchSyncResponseSubmission = {
   is_flagged: boolean;
 
   status: string;
-
   error_message: string | null;
   processed_at: string | null;
 };
 
-/*
- * The permanent, authoritative record from course_test_results. Matched
- * back to a local submission by crs_tst_id + (std_id OR student_id_no) -
- * see getOfficialResultForSubmission() in omrSubmissionSync.ts. This is
- * preferred over BatchSyncResponseSubmission.final_score when both are
- * present.
- */
 export type BatchSyncCourseTestResult = {
   ctr_id?: number;
+
   crs_tst_id: number;
   std_id: number;
 
@@ -106,6 +82,7 @@ export type BatchSyncResponse = {
     tst_id: number;
 
     source: "mobile" | "postman";
+
     status: string;
 
     total_submissions: number;
@@ -118,17 +95,8 @@ export type BatchSyncResponse = {
 
   submissions: BatchSyncResponseSubmission[];
 
-  // Optional: may be absent if Laravel defers grading to a queued job
-  // rather than computing course_test_results synchronously in this
-  // response.
   course_test_results?: BatchSyncCourseTestResult[];
 };
-
-/*
-|--------------------------------------------------------------------------
-| uploadOmrBatch
-|--------------------------------------------------------------------------
-*/
 
 export async function uploadOmrBatch(
   token: string,

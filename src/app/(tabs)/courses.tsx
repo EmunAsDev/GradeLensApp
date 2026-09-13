@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
 import {
   ActivityIndicator,
@@ -11,6 +11,8 @@ import {
   View,
 } from "react-native";
 
+import { router, useFocusEffect } from "expo-router";
+
 import { ApiError } from "../../api/client";
 
 import { useAuth } from "../../auth/AuthContext";
@@ -19,10 +21,15 @@ import { getCourses, LocalCourse } from "../../database/courseRepository";
 
 import { syncCourses } from "../../sync/courseSync";
 
-import { router } from "expo-router";
+import { runGuardedSync, TARGETED_REFRESH_COOLDOWN_MS } from "@/sync/syncGuard";
+
+import { AppScreenHeader } from "@/../components/layout/AppScreenHeader";
+import { theme } from "@/../theme";
+
+const COURSES_SYNC_KEY = "courses";
 
 export default function CoursesScreen() {
-  const { token } = useAuth();
+  const { token, employee } = useAuth();
 
   const [courses, setCourses] = useState<LocalCourse[]>([]);
 
@@ -36,27 +43,111 @@ export default function CoursesScreen() {
     setCourses(localCourses);
   }, []);
 
+  /*
+   * Opening/focusing the screen reads SQLite only.
+   *
+   * It does NOT automatically call Laravel.
+   */
+  useFocusEffect(
+    useCallback(() => {
+      let isActive = true;
+
+      const load = async () => {
+        try {
+          const localCourses = await getCourses();
+
+          if (!isActive) {
+            return;
+          }
+
+          setCourses(localCourses);
+        } finally {
+          if (isActive) {
+            setIsLoading(false);
+          }
+        }
+      };
+
+      void load();
+
+      return () => {
+        isActive = false;
+      };
+    }, []),
+  );
+
+  /*
+   * Pull-to-refresh is an explicit targeted server refresh.
+   *
+   * Successful refreshes have a 30-second persisted cooldown.
+   * Failed/offline requests do not start the cooldown.
+   */
   const synchronize = useCallback(
-    async (showError = false) => {
-      if (!token) {
+    async (showFeedback = false) => {
+      if (!token || !employee) {
         return;
       }
 
       try {
-        await syncCourses(token);
+        const result = await runGuardedSync({
+          employeeId: employee.id,
 
-        await loadLocalCourses();
-      } catch (error) {
-        console.log("Course sync failed:", error);
+          syncKey: COURSES_SYNC_KEY,
 
-        if (!showError) {
+          cooldownMs: TARGETED_REFRESH_COOLDOWN_MS,
+
+          task: async () => {
+            await syncCourses(token);
+          },
+        });
+
+        if (result.status === "in_progress") {
           return;
         }
 
-        if (error instanceof ApiError && error.status === 401) {
-          Alert.alert("Session Expired", "Please login again.");
+        if (result.status === "cooldown") {
+          await loadLocalCourses();
+
+          if (showFeedback) {
+            const seconds = Math.max(1, Math.ceil(result.remainingMs / 1000));
+
+            Alert.alert(
+              "Recently Updated",
+              `Courses were refreshed recently. You can check the server again in about ${seconds} second${
+                seconds === 1 ? "" : "s"
+              }.`,
+            );
+          }
 
           return;
+        }
+
+        await loadLocalCourses();
+      } catch (error) {
+        /*
+         * Existing SQLite data remains visible even when the API request fails.
+         */
+        await loadLocalCourses();
+
+        if (!showFeedback) {
+          return;
+        }
+
+        if (error instanceof ApiError) {
+          if (error.status === 401) {
+            Alert.alert("Session Expired", "Please login again.");
+
+            return;
+          }
+
+          if (error.status === 429) {
+            Alert.alert(
+              "Refresh Paused",
+              "The server temporarily paused requests. Your saved courses are still available.",
+            );
+
+            return;
+          }
         }
 
         Alert.alert(
@@ -65,36 +156,14 @@ export default function CoursesScreen() {
         );
       }
     },
-    [token, loadLocalCourses],
+    [token, employee, loadLocalCourses],
   );
 
-  useEffect(() => {
-    const load = async () => {
-      try {
-        /*
-                    |--------------------------------------------------------------------------
-                    | Show SQLite Data First
-                    |--------------------------------------------------------------------------
-                    */
-
-        await loadLocalCourses();
-
-        /*
-                    |--------------------------------------------------------------------------
-                    | Then Attempt Online Refresh
-                    |--------------------------------------------------------------------------
-                    */
-
-        await synchronize();
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    void load();
-  }, [loadLocalCourses, synchronize]);
-
   const handleRefresh = async () => {
+    if (isRefreshing) {
+      return;
+    }
+
     setIsRefreshing(true);
 
     try {
@@ -114,11 +183,11 @@ export default function CoursesScreen() {
 
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Courses</Text>
-
-        <Text style={styles.subtitle}>Your synchronized courses</Text>
-      </View>
+      <AppScreenHeader
+        eyebrow="GradeLens"
+        title="Courses"
+        subtitle="Your synchronized courses and offline course workspace."
+      />
 
       <FlatList
         data={courses}
@@ -134,7 +203,7 @@ export default function CoursesScreen() {
             <Text style={styles.emptyTitle}>No courses found</Text>
 
             <Text style={styles.emptyText}>
-              Connect to the server and pull down to synchronize.
+              Pull down while online to check GradeLens for updated courses.
             </Text>
           </View>
         }
@@ -175,33 +244,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
 
-    backgroundColor: "#f8fafc",
-  },
-
-  header: {
-    paddingHorizontal: 20,
-
-    paddingTop: 58,
-
-    paddingBottom: 18,
-
-    backgroundColor: "#ffffff",
-  },
-
-  title: {
-    fontSize: 28,
-
-    fontWeight: "700",
-
-    color: "#111827",
-  },
-
-  subtitle: {
-    marginTop: 4,
-
-    fontSize: 14,
-
-    color: "#6b7280",
+    backgroundColor: theme.colors.background,
   },
 
   list: {

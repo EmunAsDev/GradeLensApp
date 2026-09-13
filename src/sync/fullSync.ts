@@ -12,49 +12,75 @@ import { syncCourseTestStudents } from "@/sync/courseTestStudentSync";
 
 import { syncOmrPackage } from "@/sync/omrPackageSync";
 
-import { syncPendingOmrSubmissions } from "@/sync/omrSubmissionSync";
+import {
+  FULL_REFERENCE_SYNC_COOLDOWN_MS,
+  runGuardedSync,
+  type GuardedSyncResult,
+} from "@/sync/syncGuard";
 
-export type FullSyncResult = {
+const FULL_REFERENCE_SYNC_KEY = "full_reference_sync";
+
+export type FullSyncSummary = {
   courseCount: number;
 
   courseTestCoursesSynced: number;
 
   courseTestsWithStudentsSynced: number;
+  courseTestsWithStudentsFailed: number;
 
   omrPackagesSynced: number;
-
   omrPackagesFailed: number;
-
-  omrSubmissionBatchesSynced: number;
-  omrSubmissionsSynced: number;
-  omrSubmissionsFailed: number;
 };
 
-export async function performFullSync(token: string): Promise<FullSyncResult> {
-  /*
-    |--------------------------------------------------------------------------
-    | Device Registration
-    |--------------------------------------------------------------------------
-    */
+export type FullSyncResult = GuardedSyncResult<FullSyncSummary>;
 
+export async function performFullSync(
+  token: string,
+  employeeId: number,
+  options?: {
+    ignoreCooldown?: boolean;
+  },
+): Promise<FullSyncResult> {
+  return await runGuardedSync({
+    employeeId,
+
+    syncKey: FULL_REFERENCE_SYNC_KEY,
+
+    cooldownMs: FULL_REFERENCE_SYNC_COOLDOWN_MS,
+
+    ignoreCooldown: options?.ignoreCooldown ?? false,
+
+    task: async () => {
+      return await performReferenceSync(token);
+    },
+  });
+}
+
+async function performReferenceSync(token: string): Promise<FullSyncSummary> {
+  /*
+   * Full Sync is intentionally REFERENCE DATA ONLY.
+   *
+   * It prepares/updates the information required for offline GradeLens use.
+   * It does NOT upload locally scanned OMR submissions.
+   *
+   * Scanned papers are submitted only from the Batch screen.
+   */
+
+  /*
+   * Device Registration
+   */
   await ensureDeviceRegistered(token);
 
   /*
-    |--------------------------------------------------------------------------
-    | Courses
-    |--------------------------------------------------------------------------
-    */
-
+   * Courses
+   */
   await syncCourses(token);
 
   const courses = await getCourses();
 
   /*
-    |--------------------------------------------------------------------------
-    | Course Tests
-    |--------------------------------------------------------------------------
-    */
-
+   * Course Tests
+   */
   let courseTestCoursesSynced = 0;
 
   for (const course of courses) {
@@ -64,42 +90,30 @@ export async function performFullSync(token: string): Promise<FullSyncResult> {
   }
 
   /*
-    |--------------------------------------------------------------------------
-    | Updated Local Course Tests
-    |--------------------------------------------------------------------------
-    */
-
+   * Updated Local Course Tests
+   */
   const courseTests = await getAllCourseTests();
 
   /*
-    |--------------------------------------------------------------------------
-    | Students + Existing Final Scores
-    |--------------------------------------------------------------------------
-    */
-
+   * Students + Existing Final Scores
+   */
   let courseTestsWithStudentsSynced = 0;
+  let courseTestsWithStudentsFailed = 0;
 
   for (const courseTest of courseTests) {
     try {
       await syncCourseTestStudents(token, courseTest.crs_tst_id);
 
       courseTestsWithStudentsSynced++;
-    } catch (error) {
-      console.error(
-        `[STUDENT SYNC] CourseTest ${courseTest.crs_tst_id} failed:`,
-        error,
-      );
+    } catch {
+      courseTestsWithStudentsFailed++;
     }
   }
 
   /*
-    |--------------------------------------------------------------------------
-    | OMR Packages
-    |--------------------------------------------------------------------------
-    */
-
+   * OMR Packages
+   */
   let omrPackagesSynced = 0;
-
   let omrPackagesFailed = 0;
 
   for (const courseTest of courseTests) {
@@ -107,39 +121,9 @@ export async function performFullSync(token: string): Promise<FullSyncResult> {
       await syncOmrPackage(token, courseTest.crs_tst_id);
 
       omrPackagesSynced++;
-    } catch (error) {
-      console.error(
-        `[OMR SYNC] CourseTest ${courseTest.crs_tst_id} failed:`,
-        error,
-      );
-
+    } catch {
       omrPackagesFailed++;
     }
-  }
-
-  /*
-    |--------------------------------------------------------------------------
-    | Pending OMR Submissions
-    |--------------------------------------------------------------------------
-    |
-    | Upload only after normal reference-data synchronization. All scan data
-    | already exists safely in SQLite, so a network failure leaves it pending.
-    */
-
-  let omrSubmissionBatchesSynced = 0;
-  let omrSubmissionsSynced = 0;
-  let omrSubmissionsFailed = 0;
-
-  try {
-    const omrSubmissionSync = await syncPendingOmrSubmissions(token);
-
-    omrSubmissionBatchesSynced = omrSubmissionSync.batchCount;
-
-    omrSubmissionsSynced = omrSubmissionSync.syncedCount;
-
-    omrSubmissionsFailed = omrSubmissionSync.failedCount;
-  } catch (error) {
-    console.error("[OMR SUBMISSION SYNC] Failed:", error);
   }
 
   return {
@@ -148,13 +132,9 @@ export async function performFullSync(token: string): Promise<FullSyncResult> {
     courseTestCoursesSynced,
 
     courseTestsWithStudentsSynced,
+    courseTestsWithStudentsFailed,
 
     omrPackagesSynced,
-
     omrPackagesFailed,
-
-    omrSubmissionBatchesSynced,
-    omrSubmissionsSynced,
-    omrSubmissionsFailed,
   };
 }

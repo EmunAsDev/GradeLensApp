@@ -1,12 +1,21 @@
+import { useEffect, useState } from "react";
+
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 
 import { Stack } from "expo-router";
 
-import { useEffect, useState } from "react";
+import { StatusBar } from "expo-status-bar";
+
+import {
+  initialWindowMetrics,
+  SafeAreaProvider,
+} from "react-native-safe-area-context";
 
 import { AuthProvider, useAuth } from "../auth/AuthContext";
 
 import { initializeDatabase } from "../database/database";
+
+import { theme } from "@/../theme";
 
 function RootNavigator() {
   const { isLoading: isAuthLoading } = useAuth();
@@ -30,31 +39,43 @@ function RootNavigator() {
   if (isAuthLoading || !isDatabaseReady) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" />
+        <StatusBar style="dark" />
+
+        <ActivityIndicator size="large" color={theme.colors.primary} />
       </View>
     );
   }
 
   return (
-    <Stack
-      screenOptions={{
-        headerShown: false,
-      }}
-    >
-      <Stack.Screen name="index" />
+    <>
+      <StatusBar style="dark" />
 
-      <Stack.Screen name="login" />
+      <Stack
+        screenOptions={{
+          headerShown: false,
 
-      <Stack.Screen name="(tabs)" />
-    </Stack>
+          contentStyle: {
+            backgroundColor: theme.colors.background,
+          },
+        }}
+      >
+        <Stack.Screen name="index" />
+
+        <Stack.Screen name="login" />
+
+        <Stack.Screen name="(tabs)" />
+      </Stack>
+    </>
   );
 }
 
 export default function RootLayout() {
   return (
-    <AuthProvider>
-      <RootNavigator />
-    </AuthProvider>
+    <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+      <AuthProvider>
+        <RootNavigator />
+      </AuthProvider>
+    </SafeAreaProvider>
   );
 }
 
@@ -65,5 +86,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
 
     justifyContent: "center",
+
+    backgroundColor: theme.colors.background,
   },
 });

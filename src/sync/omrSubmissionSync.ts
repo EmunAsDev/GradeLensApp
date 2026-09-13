@@ -1,5 +1,7 @@
 import { randomUUID } from "react-native-quick-crypto";
 
+import { ApiError } from "@/api/client";
+
 import {
   uploadOmrBatch,
   type BatchSyncAnswers,
@@ -10,18 +12,32 @@ import {
 
 import {
   assignOmrBatchUuid,
-  getPendingOmrSubmissions,
+  getOutstandingOmrSubmissionsForScanBatch,
+  markOmrBatchDeferred,
   markOmrBatchFailed,
   markOmrSubmissionFailed,
   markOmrSubmissionSynced,
   type ParsedLocalOmrSubmission,
 } from "@/database/omrSubmissionRepository";
 
-export type PendingOmrSyncResult = {
-  batchCount: number;
+import {
+  getScanBatches,
+  markScanBatchStatus,
+  refreshScanBatchStatus,
+} from "@/database/scanBatchRepository";
+
+export type ScanBatchSyncResult = {
+  serverBatchCount: number;
   submissionCount: number;
   syncedCount: number;
   failedCount: number;
+
+  rateLimited: boolean;
+  retryAfterSeconds: number | null;
+};
+
+export type PendingOmrSyncResult = ScanBatchSyncResult & {
+  localBatchCount: number;
 };
 
 const MAX_BATCH_SIZE = 100;
@@ -38,16 +54,6 @@ function normalizeFinalScore(
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-/*
- * Laravel's authoritative scoring contract expects every question value as
- * an ARRAY of selected/shaded choices. We therefore build the server answer
- * map from shaded_choices, not from the compact UI answers map.
- *
- * Example:
- * Q15 shaded C + D -> ["C", "D"]
- * blank Q22        -> []
- * accidental multi -> ["B", "E"]
- */
 function buildServerAnswers(
   submission: ParsedLocalOmrSubmission,
 ): BatchSyncAnswers {
@@ -82,19 +88,12 @@ function buildAnswerStatuses(
 function toServerSubmission(submission: ParsedLocalOmrSubmission) {
   return {
     submission_uuid: submission.submission_uuid,
-
     sheet_uuid: submission.sheet_uuid,
-
     student_id_no: submission.student_id_no,
-
     answers: buildServerAnswers(submission),
-
     answer_statuses: buildAnswerStatuses(submission),
-
     tentative_score: submission.tentative_score,
-
-    requires_review: submission.review_question_numbers.length > 0,
-
+    requires_review: submission.requires_review,
     captured_at: submission.captured_at,
   };
 }
@@ -131,7 +130,6 @@ async function applyBatchResponse(
       await markOmrSubmissionFailed(
         localSubmission.submission_uuid,
         "Laravel did not return a result for this submission.",
-        null,
       );
 
       failedCount++;
@@ -155,19 +153,15 @@ async function applyBatchResponse(
       localSubmission,
     );
 
-    /*
-     * Prefer the permanent CourseTestResult returned by Laravel.
-     * Fall back to the ingestion submission's final_score for compatibility
-     * with the earlier synchronous controller response.
-     */
     const finalScore = normalizeFinalScore(
       officialResult?.final_score ?? serverSubmission.final_score,
     );
 
     await markOmrSubmissionSynced(localSubmission.submission_uuid, {
       serverStatus: serverSubmission.status,
-
       finalScore,
+      serverRequiresReview: serverSubmission.requires_review,
+      isFlagged: serverSubmission.is_flagged,
     });
 
     syncedCount++;
@@ -180,31 +174,35 @@ async function applyBatchResponse(
 }
 
 /*
- * Choose the next stable local batch.
+ * One faculty-facing Scan Batch may contain more than 100 papers.
  *
- * 1. Retry an already-assigned batch_uuid first.
- * 2. Otherwise group unsent rows by the same crs_tst_id + tst_id,
- *    create ONE batch UUID, and persist it BEFORE network I/O.
+ * Laravel still receives server batches capped at 100. Existing batch_uuid
+ * groups are retried first; only never-assigned rows receive a new batch_uuid.
  */
-async function prepareNextBatch(): Promise<{
+async function prepareNextServerBatch(
+  scanBatchUuid: string,
+  skipBatchUuids: Set<string>,
+): Promise<{
   batchUuid: string;
   submissions: ParsedLocalOmrSubmission[];
 } | null> {
-  const pending = await getPendingOmrSubmissions();
+  const outstanding =
+    await getOutstandingOmrSubmissionsForScanBatch(scanBatchUuid);
 
-  if (pending.length === 0) {
+  if (outstanding.length === 0) {
     return null;
   }
 
-  const alreadyAssigned = pending.find(
-    (submission: any) => submission.batch_uuid !== null,
+  const alreadyAssigned = outstanding.find(
+    (submission) =>
+      submission.batch_uuid !== null &&
+      !skipBatchUuids.has(submission.batch_uuid),
   );
 
   if (alreadyAssigned?.batch_uuid) {
     return {
       batchUuid: alreadyAssigned.batch_uuid,
-
-      submissions: pending
+      submissions: outstanding
         .filter(
           (submission) => submission.batch_uuid === alreadyAssigned.batch_uuid,
         )
@@ -212,27 +210,24 @@ async function prepareNextBatch(): Promise<{
     };
   }
 
-  const first = pending[0];
-
-  const submissions = pending
-    .filter(
-      (submission) =>
-        submission.batch_uuid === null &&
-        submission.crs_tst_id === first.crs_tst_id &&
-        submission.tst_id === first.tst_id,
-    )
+  const unassigned = outstanding
+    .filter((submission) => submission.batch_uuid === null)
     .slice(0, MAX_BATCH_SIZE);
+
+  if (unassigned.length === 0) {
+    return null;
+  }
 
   const batchUuid = randomUUID();
 
   await assignOmrBatchUuid(
-    submissions.map((submission) => submission.submission_uuid),
+    unassigned.map((submission) => submission.submission_uuid),
     batchUuid,
   );
 
   return {
     batchUuid,
-    submissions: submissions.map((submission) => ({
+    submissions: unassigned.map((submission) => ({
       ...submission,
       batch_uuid: batchUuid,
       sync_status: "syncing",
@@ -240,71 +235,90 @@ async function prepareNextBatch(): Promise<{
   };
 }
 
-async function syncOneBatch(token: string): Promise<{
+async function syncOneServerBatch(
+  token: string,
+  scanBatchUuid: string,
+  skipBatchUuids: Set<string>,
+): Promise<{
   didWork: boolean;
+  stopSyncing: boolean;
   submissionCount: number;
   syncedCount: number;
   failedCount: number;
+  rateLimited: boolean;
+  retryAfterSeconds: number | null;
 }> {
-  const prepared = await prepareNextBatch();
+  const prepared = await prepareNextServerBatch(scanBatchUuid, skipBatchUuids);
 
   if (!prepared) {
     return {
       didWork: false,
+      stopSyncing: false,
       submissionCount: 0,
       syncedCount: 0,
       failedCount: 0,
+      rateLimited: false,
+      retryAfterSeconds: null,
     };
   }
 
   const first = prepared.submissions[0];
 
+  if (!first) {
+    return {
+      didWork: false,
+      stopSyncing: false,
+      submissionCount: 0,
+      syncedCount: 0,
+      failedCount: 0,
+      rateLimited: false,
+      retryAfterSeconds: null,
+    };
+  }
+
+  const mismatched = prepared.submissions.some(
+    (submission) =>
+      submission.crs_tst_id !== first.crs_tst_id ||
+      submission.tst_id !== first.tst_id,
+  );
+
+  if (mismatched) {
+    throw new Error(
+      "A local Scan Batch cannot contain submissions from different Course Tests.",
+    );
+  }
+
   const payload: BatchSyncRequestPayload = {
     batch_uuid: prepared.batchUuid,
-
     crs_tst_id: first.crs_tst_id,
-
     tst_id: first.tst_id,
-
     source: "mobile",
-
     submissions: prepared.submissions.map(toServerSubmission),
   };
-
-  console.log("[OMR SYNC] Uploading batch:", {
-    batchUuid: payload.batch_uuid,
-
-    courseTestId: payload.crs_tst_id,
-
-    testId: payload.tst_id,
-
-    submissionCount: payload.submissions.length,
-  });
 
   try {
     const response = await uploadOmrBatch(token, payload);
 
-    console.log("[OMR SYNC] Server batch response:", {
-      batchUuid: response.batch.batch_uuid,
-
-      status: response.batch.status,
-
-      totalSubmissions: response.batch.total_submissions,
-
-      processedSubmissions: response.batch.processed_submissions,
-
-      failedSubmissions: response.batch.failed_submissions,
-    });
-
     const applied = await applyBatchResponse(response, prepared.submissions);
+
+    /*
+     * Do not immediately retry child-level failures in the same button press.
+     * Keep their stable batch_uuid for the teacher's next Retry action while
+     * allowing any never-assigned submissions in this local Scan Batch to
+     * continue into the next server chunk.
+     */
+    if (applied.failedCount > 0) {
+      skipBatchUuids.add(prepared.batchUuid);
+    }
 
     return {
       didWork: true,
+      stopSyncing: false,
       submissionCount: prepared.submissions.length,
-
       syncedCount: applied.syncedCount,
-
       failedCount: applied.failedCount,
+      rateLimited: false,
+      retryAfterSeconds: null,
     };
   } catch (error) {
     const message =
@@ -312,42 +326,144 @@ async function syncOneBatch(token: string): Promise<{
         ? error.message
         : "Unknown OMR synchronization error.";
 
+    if (error instanceof ApiError && error.status === 429) {
+      const retryAfterSeconds = error.retryAfterSeconds;
+
+      const deferredMessage =
+        retryAfterSeconds !== null
+          ? `Server rate limit reached. Retry after about ${retryAfterSeconds} second(s).`
+          : "Server rate limit reached. Please wait before syncing again.";
+
+      await markOmrBatchDeferred(prepared.batchUuid, deferredMessage);
+
+      return {
+        didWork: true,
+        stopSyncing: true,
+        submissionCount: prepared.submissions.length,
+        syncedCount: 0,
+        failedCount: 0,
+        rateLimited: true,
+        retryAfterSeconds,
+      };
+    }
+
     await markOmrBatchFailed(prepared.batchUuid, message);
 
-    console.error("[OMR SYNC] Batch upload failed:", {
-      batchUuid: prepared.batchUuid,
+    skipBatchUuids.add(prepared.batchUuid);
 
-      error: message,
-    });
-
-    throw error;
+    return {
+      didWork: true,
+      stopSyncing: true,
+      submissionCount: prepared.submissions.length,
+      syncedCount: 0,
+      failedCount: prepared.submissions.length,
+      rateLimited: false,
+      retryAfterSeconds: null,
+    };
   }
 }
 
+export async function syncScanBatch(
+  token: string,
+  scanBatchUuid: string,
+): Promise<ScanBatchSyncResult> {
+  const normalizedUuid = scanBatchUuid.trim();
+
+  if (!normalizedUuid) {
+    throw new Error("A Scan Batch UUID is required.");
+  }
+
+  const result: ScanBatchSyncResult = {
+    serverBatchCount: 0,
+    submissionCount: 0,
+    syncedCount: 0,
+    failedCount: 0,
+    rateLimited: false,
+    retryAfterSeconds: null,
+  };
+
+  await markScanBatchStatus(normalizedUuid, "submitting");
+
+  const skipBatchUuids = new Set<string>();
+
+  try {
+    while (true) {
+      const batch = await syncOneServerBatch(
+        token,
+        normalizedUuid,
+        skipBatchUuids,
+      );
+
+      if (!batch.didWork) {
+        break;
+      }
+
+      result.serverBatchCount++;
+      result.submissionCount += batch.submissionCount;
+      result.syncedCount += batch.syncedCount;
+      result.failedCount += batch.failedCount;
+
+      if (batch.rateLimited) {
+        result.rateLimited = true;
+        result.retryAfterSeconds = batch.retryAfterSeconds;
+      }
+
+      if (batch.stopSyncing) {
+        break;
+      }
+    }
+
+    return result;
+  } finally {
+    await refreshScanBatchStatus(normalizedUuid);
+  }
+}
+
+/*
+ * Compatibility helper. The Batch screen should use syncScanBatch() so the
+ * teacher explicitly chooses which local batch to submit.
+ */
 export async function syncPendingOmrSubmissions(
   token: string,
 ): Promise<PendingOmrSyncResult> {
   const result: PendingOmrSyncResult = {
-    batchCount: 0,
+    localBatchCount: 0,
+    serverBatchCount: 0,
     submissionCount: 0,
     syncedCount: 0,
     failedCount: 0,
+    rateLimited: false,
+    retryAfterSeconds: null,
   };
 
-  while (true) {
-    const batch = await syncOneBatch(token);
+  const batches = await getScanBatches();
 
-    if (!batch.didWork) {
-      break;
+  for (const batch of batches) {
+    if (batch.status === "submitted") {
+      continue;
     }
 
-    result.batchCount++;
+    const outstanding = await getOutstandingOmrSubmissionsForScanBatch(
+      batch.scan_batch_uuid,
+    );
 
-    result.submissionCount += batch.submissionCount;
+    if (outstanding.length === 0) {
+      continue;
+    }
 
-    result.syncedCount += batch.syncedCount;
+    const batchResult = await syncScanBatch(token, batch.scan_batch_uuid);
 
-    result.failedCount += batch.failedCount;
+    result.localBatchCount++;
+    result.serverBatchCount += batchResult.serverBatchCount;
+    result.submissionCount += batchResult.submissionCount;
+    result.syncedCount += batchResult.syncedCount;
+    result.failedCount += batchResult.failedCount;
+
+    if (batchResult.rateLimited) {
+      result.rateLimited = true;
+      result.retryAfterSeconds = batchResult.retryAfterSeconds;
+      break;
+    }
   }
 
   return result;

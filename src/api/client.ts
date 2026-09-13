@@ -7,14 +7,40 @@ if (!API_URL) {
 export class ApiError extends Error {
   status: number;
   data: any;
+  retryAfterSeconds: number | null;
 
-  constructor(status: number, data: any) {
+  constructor(
+    status: number,
+    data: any,
+    retryAfterSeconds: number | null = null,
+  ) {
     super(data?.message ?? "An API request failed.");
 
     this.name = "ApiError";
     this.status = status;
     this.data = data;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
+}
+
+function parseRetryAfterSeconds(value: string | null): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const numeric = Number(value);
+
+  if (Number.isFinite(numeric) && numeric >= 0) {
+    return Math.ceil(numeric);
+  }
+
+  const retryAt = Date.parse(value);
+
+  if (Number.isNaN(retryAt)) {
+    return null;
+  }
+
+  return Math.max(0, Math.ceil((retryAt - Date.now()) / 1000));
 }
 
 type ApiRequestOptions = RequestInit & {
@@ -57,7 +83,11 @@ export async function apiRequest<T>(
   }
 
   if (!response.ok) {
-    throw new ApiError(response.status, data);
+    throw new ApiError(
+      response.status,
+      data,
+      parseRetryAfterSeconds(response.headers.get("retry-after")),
+    );
   }
 
   return data as T;

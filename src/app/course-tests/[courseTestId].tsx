@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import {
   ActivityIndicator,
@@ -10,7 +10,7 @@ import {
   View,
 } from "react-native";
 
-import { Stack, useLocalSearchParams } from "expo-router";
+import { useFocusEffect, useLocalSearchParams } from "expo-router";
 
 import { ApiError } from "@/api/client";
 
@@ -25,6 +25,17 @@ import {
 
 import { syncCourseTestStudents } from "@/sync/courseTestStudentSync";
 
+import {
+  buildEmployeeSyncKey,
+  runGuardedSync,
+  TARGETED_REFRESH_COOLDOWN_MS,
+} from "@/sync/syncGuard";
+
+import { AppScreenHeader } from "@/../components/layout/AppScreenHeader";
+import { theme } from "@/../theme";
+
+const COURSE_TEST_STUDENTS_SYNC_KEY = "course_test_students";
+
 export default function CourseTestDetailScreen() {
   const { courseTestId, courseId } = useLocalSearchParams<{
     courseTestId: string;
@@ -32,7 +43,7 @@ export default function CourseTestDetailScreen() {
     courseId: string;
   }>();
 
-  const { token } = useAuth();
+  const { token, employee } = useAuth();
 
   const numericCourseTestId = Number(courseTestId);
 
@@ -80,31 +91,86 @@ export default function CourseTestDetailScreen() {
 
   /*
     |--------------------------------------------------------------------------
-    | Online Refresh
+    | Targeted Online Refresh
     |--------------------------------------------------------------------------
+    |
+    | Opening/focusing this screen does NOT call Laravel.
+    |
+    | Pull-to-refresh is the explicit server refresh action. A successful
+    | refresh is protected by the persisted 30-second employee-scoped cooldown.
+    |
     */
 
   const synchronize = useCallback(
-    async (showError = false) => {
-      if (!token || !Number.isFinite(numericCourseTestId)) {
+    async (showFeedback = false) => {
+      if (!token || !employee || !Number.isFinite(numericCourseTestId)) {
         return;
       }
 
       try {
-        await syncCourseTestStudents(token, numericCourseTestId);
+        const result = await runGuardedSync({
+          employeeId: employee.id,
 
-        await loadLocal();
-      } catch (error) {
-        console.error("Course Test student sync failed:", error);
+          syncKey: buildEmployeeSyncKey(
+            COURSE_TEST_STUDENTS_SYNC_KEY,
+            numericCourseTestId,
+          ),
 
-        if (!showError) {
+          cooldownMs: TARGETED_REFRESH_COOLDOWN_MS,
+
+          task: async () => {
+            await syncCourseTestStudents(token, numericCourseTestId);
+          },
+        });
+
+        if (result.status === "in_progress") {
           return;
         }
 
-        if (error instanceof ApiError && error.status === 401) {
-          Alert.alert("Session Expired", "Please login again.");
+        if (result.status === "cooldown") {
+          await loadLocal();
+
+          if (showFeedback) {
+            const seconds = Math.max(1, Math.ceil(result.remainingMs / 1000));
+
+            Alert.alert(
+              "Recently Updated",
+              `Student data was refreshed recently. You can check the server again in about ${seconds} second${
+                seconds === 1 ? "" : "s"
+              }.`,
+            );
+          }
 
           return;
+        }
+
+        await loadLocal();
+      } catch (error) {
+        /*
+         * Existing SQLite data remains authoritative for the screen if
+         * Laravel cannot be reached.
+         */
+        await loadLocal();
+
+        if (!showFeedback) {
+          return;
+        }
+
+        if (error instanceof ApiError) {
+          if (error.status === 401) {
+            Alert.alert("Session Expired", "Please login again.");
+
+            return;
+          }
+
+          if (error.status === 429) {
+            Alert.alert(
+              "Refresh Paused",
+              "The server temporarily paused requests. Your saved student data is still available.",
+            );
+
+            return;
+          }
         }
 
         Alert.alert(
@@ -113,40 +179,66 @@ export default function CourseTestDetailScreen() {
         );
       }
     },
-    [token, numericCourseTestId, loadLocal],
+    [token, employee, numericCourseTestId, loadLocal],
   );
 
   /*
     |--------------------------------------------------------------------------
-    | Initial Load
+    | Screen Focus
     |--------------------------------------------------------------------------
+    |
+    | Navigating to or returning to this screen reloads SQLite only.
+    |
+    | This lets changes made by Settings Sync or Batch Sync appear here
+    | without making another API request merely because the screen focused.
+    |
     */
 
-  useEffect(() => {
-    const load = async () => {
-      try {
-        /*
-                    |--------------------------------------------------------------------------
-                    | SQLite First
-                    |--------------------------------------------------------------------------
-                    */
+  useFocusEffect(
+    useCallback(() => {
+      let isActive = true;
 
-        await loadLocal();
+      const load = async () => {
+        try {
+          if (
+            !Number.isFinite(numericCourseTestId) ||
+            !Number.isFinite(numericCourseId)
+          ) {
+            return;
+          }
 
-        /*
-                    |--------------------------------------------------------------------------
-                    | Server Second
-                    |--------------------------------------------------------------------------
-                    */
+          const courseTest = await getCourseTest(numericCourseTestId);
 
-        await synchronize();
-      } finally {
-        setIsLoading(false);
-      }
-    };
+          const localStudents = await getCourseTestStudents(
+            numericCourseTestId,
+            numericCourseId,
+          );
 
-    void load();
-  }, [loadLocal, synchronize]);
+          if (!isActive) {
+            return;
+          }
+
+          if (courseTest) {
+            setTitle(courseTest.title ?? "Course Test");
+
+            setQuestionCount(courseTest.question_count);
+          }
+
+          setStudents(localStudents);
+        } finally {
+          if (isActive) {
+            setIsLoading(false);
+          }
+        }
+      };
+
+      void load();
+
+      return () => {
+        isActive = false;
+      };
+    }, [numericCourseTestId, numericCourseId]),
+  );
 
   /*
     |--------------------------------------------------------------------------
@@ -155,6 +247,10 @@ export default function CourseTestDetailScreen() {
     */
 
   const handleRefresh = async () => {
+    if (isRefreshing) {
+      return;
+    }
+
     setIsRefreshing(true);
 
     try {
@@ -193,57 +289,48 @@ export default function CourseTestDetailScreen() {
   }
 
   return (
-    <>
-      <Stack.Screen
-        options={{
-          headerShown: true,
-
-          title,
-        }}
+    <View style={styles.container}>
+      <AppScreenHeader
+        back
+        backLabel="Course Tests"
+        eyebrow="Course Test"
+        title={title}
+        subtitle="Student scan progress and finalized results saved on this device."
       />
 
-      <View style={styles.container}>
-        <View style={styles.header}>
-          <Text style={styles.title}>{title}</Text>
-
-          <View style={styles.summaryRow}>
-            <SummaryBox value={students.length} label="Students" />
-
-            <SummaryBox value={resultCount} label="Scanned" />
-
-            <SummaryBox value={finalCount} label="Final" />
-
-            <SummaryBox value={questionCount ?? "—"} label="Items" />
-          </View>
+      <View style={styles.summaryCard}>
+        <View style={styles.summaryRow}>
+          <SummaryBox value={students.length} label="Students" />
+          <SummaryBox value={resultCount} label="Scanned" />
+          <SummaryBox value={finalCount} label="Final" />
+          <SummaryBox value={questionCount ?? "—"} label="Items" />
         </View>
-
-        <FlatList
-          data={students}
-          keyExtractor={(item) => String(item.std_id)}
-          contentContainerStyle={
-            students.length === 0 ? styles.emptyContainer : styles.list
-          }
-          refreshControl={
-            <RefreshControl
-              refreshing={isRefreshing}
-              onRefresh={handleRefresh}
-            />
-          }
-          ListEmptyComponent={
-            <View style={styles.empty}>
-              <Text style={styles.emptyTitle}>No Students</Text>
-
-              <Text style={styles.emptyText}>
-                Connect to GradeLens and synchronize this Course Test.
-              </Text>
-            </View>
-          }
-          renderItem={({ item }) => (
-            <StudentResultCard student={item} questionCount={questionCount} />
-          )}
-        />
       </View>
-    </>
+
+      <FlatList
+        data={students}
+        keyExtractor={(item) => String(item.std_id)}
+        contentContainerStyle={
+          students.length === 0 ? styles.emptyContainer : styles.list
+        }
+        refreshControl={
+          <RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} />
+        }
+        ListEmptyComponent={
+          <View style={styles.empty}>
+            <Text style={styles.emptyTitle}>No Students</Text>
+
+            <Text style={styles.emptyText}>
+              Pull down while online to check GradeLens for updated student
+              data.
+            </Text>
+          </View>
+        }
+        renderItem={({ item }) => (
+          <StudentResultCard student={item} questionCount={questionCount} />
+        )}
+      />
+    </View>
   );
 }
 
@@ -384,37 +471,23 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
 
-    backgroundColor: "#f8fafc",
+    backgroundColor: theme.colors.background,
   },
 
-  header: {
-    paddingHorizontal: 16,
-
-    paddingTop: 18,
-
-    paddingBottom: 18,
-
-    borderBottomWidth: 1,
-
-    borderBottomColor: "#e5e7eb",
-
-    backgroundColor: "#ffffff",
-  },
-
-  title: {
-    fontSize: 22,
-
-    fontWeight: "700",
-
-    color: "#111827",
+  summaryCard: {
+    marginHorizontal: theme.spacing.screenHorizontal,
+    marginBottom: theme.spacing.md,
+    padding: theme.spacing.cardPadding,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.surface,
+    ...theme.shadows.card,
   },
 
   summaryRow: {
     flexDirection: "row",
-
-    marginTop: 18,
-
-    gap: 8,
+    gap: theme.spacing.sm,
   },
 
   summaryItem: {

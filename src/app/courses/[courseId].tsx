@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
 import {
   ActivityIndicator,
@@ -11,7 +11,7 @@ import {
   View,
 } from "react-native";
 
-import { router, Stack, useLocalSearchParams } from "expo-router";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 
 import { ApiError } from "../../api/client";
 
@@ -28,12 +28,23 @@ import { fetchOmrPackage } from "@/api/omrPackageApi";
 
 import { getDeviceUuid } from "@/crypto/deviceKeyStorage";
 
+import {
+  buildEmployeeSyncKey,
+  runGuardedSync,
+  TARGETED_REFRESH_COOLDOWN_MS,
+} from "@/sync/syncGuard";
+
+import { AppScreenHeader } from "@/../components/layout/AppScreenHeader";
+import { theme } from "@/../theme";
+
+const COURSE_TESTS_SYNC_KEY = "course_tests";
+
 export default function CourseTestsScreen() {
   const { courseId } = useLocalSearchParams<{
     courseId: string;
   }>();
 
-  const { token } = useAuth();
+  const { token, employee } = useAuth();
 
   const numericCourseId = Number(courseId);
 
@@ -53,27 +64,106 @@ export default function CourseTestsScreen() {
     setCourseTests(localTests);
   }, [numericCourseId]);
 
+  /*
+   * Opening/focusing the screen reloads SQLite only.
+   *
+   * No automatic API request is made just because the teacher navigated here.
+   */
+  useFocusEffect(
+    useCallback(() => {
+      let isActive = true;
+
+      const load = async () => {
+        try {
+          if (!Number.isFinite(numericCourseId)) {
+            return;
+          }
+
+          const localTests = await getCourseTests(numericCourseId);
+
+          if (!isActive) {
+            return;
+          }
+
+          setCourseTests(localTests);
+        } finally {
+          if (isActive) {
+            setIsLoading(false);
+          }
+        }
+      };
+
+      void load();
+
+      return () => {
+        isActive = false;
+      };
+    }, [numericCourseId]),
+  );
+
   const synchronize = useCallback(
-    async (showError = false) => {
-      if (!token || !Number.isFinite(numericCourseId)) {
+    async (showFeedback = false) => {
+      if (!token || !employee || !Number.isFinite(numericCourseId)) {
         return;
       }
 
       try {
-        await syncCourseTests(token, numericCourseId);
+        const result = await runGuardedSync({
+          employeeId: employee.id,
 
-        await loadLocal();
-      } catch (error) {
-        console.log("Course test sync failed:", error);
+          syncKey: buildEmployeeSyncKey(COURSE_TESTS_SYNC_KEY, numericCourseId),
 
-        if (!showError) {
+          cooldownMs: TARGETED_REFRESH_COOLDOWN_MS,
+
+          task: async () => {
+            await syncCourseTests(token, numericCourseId);
+          },
+        });
+
+        if (result.status === "in_progress") {
           return;
         }
 
-        if (error instanceof ApiError && error.status === 401) {
-          Alert.alert("Session Expired", "Please login again.");
+        if (result.status === "cooldown") {
+          await loadLocal();
+
+          if (showFeedback) {
+            const seconds = Math.max(1, Math.ceil(result.remainingMs / 1000));
+
+            Alert.alert(
+              "Recently Updated",
+              `Course tests were refreshed recently. You can check the server again in about ${seconds} second${
+                seconds === 1 ? "" : "s"
+              }.`,
+            );
+          }
 
           return;
+        }
+
+        await loadLocal();
+      } catch (error) {
+        await loadLocal();
+
+        if (!showFeedback) {
+          return;
+        }
+
+        if (error instanceof ApiError) {
+          if (error.status === 401) {
+            Alert.alert("Session Expired", "Please login again.");
+
+            return;
+          }
+
+          if (error.status === 429) {
+            Alert.alert(
+              "Refresh Paused",
+              "The server temporarily paused requests. Your saved tests are still available.",
+            );
+
+            return;
+          }
         }
 
         Alert.alert(
@@ -82,7 +172,7 @@ export default function CourseTestsScreen() {
         );
       }
     },
-    [token, numericCourseId, loadLocal],
+    [token, employee, numericCourseId, loadLocal],
   );
 
   const handleDownloadOmrPackage = async (courseTestId: number) => {
@@ -104,46 +194,20 @@ export default function CourseTestsScreen() {
 
       const omrPackage = await fetchOmrPackage(token, courseTestId, deviceUuid);
 
-      console.log("[OMR PACKAGE]", {
-        crs_tst_id: omrPackage.crs_tst_id,
-
-        tst_id: omrPackage.tst_id,
-
-        question_count: omrPackage.question_count,
-
-        content_algorithm: omrPackage.encryption.content_algorithm,
-
-        wrapped_key_length: omrPackage.encryption.wrapped_key.length,
-
-        encrypted_image_length: omrPackage.answer_key.length,
-      });
-
       Alert.alert(
         "OMR Package",
         `Encrypted ${omrPackage.question_count}-item package downloaded successfully.`,
       );
-    } catch (error) {
-      console.error("OMR package download failed:", error);
-
+    } catch {
       Alert.alert("Download Failed", "Unable to download the OMR package.");
     }
   };
 
-  useEffect(() => {
-    const load = async () => {
-      try {
-        await loadLocal();
-
-        await synchronize();
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    void load();
-  }, [loadLocal, synchronize]);
-
   const handleRefresh = async () => {
+    if (isRefreshing) {
+      return;
+    }
+
     setIsRefreshing(true);
 
     try {
@@ -162,88 +226,82 @@ export default function CourseTestsScreen() {
   }
 
   return (
-    <>
-      <Stack.Screen
-        options={{
-          headerShown: true,
-          title: "Course Tests",
-        }}
+    <View style={styles.container}>
+      <AppScreenHeader
+        back
+        backLabel="Courses"
+        eyebrow="GradeLens"
+        title="Course Tests"
+        subtitle="Tests saved for this course and available to this device."
       />
 
-      <View style={styles.container}>
-        <FlatList
-          data={courseTests}
-          keyExtractor={(item) => String(item.crs_tst_id)}
-          contentContainerStyle={
-            courseTests.length === 0 ? styles.emptyContainer : styles.list
-          }
-          refreshControl={
-            <RefreshControl
-              refreshing={isRefreshing}
-              onRefresh={handleRefresh}
-            />
-          }
-          ListEmptyComponent={
-            <View style={styles.empty}>
-              <Text style={styles.emptyTitle}>No assigned tests</Text>
+      <FlatList
+        data={courseTests}
+        keyExtractor={(item) => String(item.crs_tst_id)}
+        contentContainerStyle={
+          courseTests.length === 0 ? styles.emptyContainer : styles.list
+        }
+        refreshControl={
+          <RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} />
+        }
+        ListEmptyComponent={
+          <View style={styles.empty}>
+            <Text style={styles.emptyTitle}>No assigned tests</Text>
 
-              <Text style={styles.emptyText}>
-                Pull down to synchronize when connected.
-              </Text>
-            </View>
-          }
-          renderItem={({ item }) => (
-            <Pressable
-              onPress={() => {
-                router.push({
-                  pathname: "/course-tests/[courseTestId]",
+            <Text style={styles.emptyText}>
+              Pull down while online to check GradeLens for updated tests.
+            </Text>
+          </View>
+        }
+        renderItem={({ item }) => (
+          <Pressable
+            onPress={() => {
+              router.push({
+                pathname: "/course-tests/[courseTestId]",
 
-                  params: {
-                    courseTestId: String(item.crs_tst_id),
+                params: {
+                  courseTestId: String(item.crs_tst_id),
 
-                    courseId: String(item.crs_id),
-                  },
-                });
-              }}
-              style={({ pressed }) => [
-                styles.card,
-
-                pressed && {
-                  opacity: 0.82,
+                  courseId: String(item.crs_id),
                 },
-              ]}
-            >
-              <Text style={styles.testTitle}>
-                {item.title ?? "Untitled Test"}
-              </Text>
+              });
+            }}
+            style={({ pressed }) => [
+              styles.card,
 
-              <Text style={styles.meta}>Test ID: {item.tst_id}</Text>
+              pressed && {
+                opacity: 0.82,
+              },
+            ]}
+          >
+            <Text style={styles.testTitle}>
+              {item.title ?? "Untitled Test"}
+            </Text>
 
-              {item.duration ? (
-                <Text style={styles.meta}>
-                  Duration: {item.duration} minutes
-                </Text>
-              ) : null}
+            <Text style={styles.meta}>Test ID: {item.tst_id}</Text>
 
-              {item.deadline ? (
-                <Text style={styles.meta}>Deadline: {item.deadline}</Text>
-              ) : null}
+            {item.duration ? (
+              <Text style={styles.meta}>Duration: {item.duration} minutes</Text>
+            ) : null}
 
-              <Text style={styles.meta}>
-                Paper only: {item.is_paper_only ? "Yes" : "No"}
-              </Text>
-            </Pressable>
-          )}
-        />
-      </View>
-    </>
+            {item.deadline ? (
+              <Text style={styles.meta}>Deadline: {item.deadline}</Text>
+            ) : null}
+
+            <Text style={styles.meta}>
+              Paper only: {item.is_paper_only ? "Yes" : "No"}
+            </Text>
+          </Pressable>
+        )}
+      />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#f8fafc",
+    backgroundColor: theme.colors.background,
   },
 
   list: {
