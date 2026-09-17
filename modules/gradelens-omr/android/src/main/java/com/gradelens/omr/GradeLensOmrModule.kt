@@ -163,6 +163,22 @@ class GradeLensOmrModule : Module() {
         private const val SHADED_MIN =
             0.85
 
+        /*
+         * 100-item-only recovery thresholds.
+         *
+         * The 50-item resolver remains frozen. These values only compensate
+         * for the smaller/tighter 100-item bubble geometry seen in real
+         * normalized phone captures.
+         */
+        private const val BASELINE_UNSHADED_RECOVERY_MAX_100 =
+            0.37
+
+        private const val UNSHADED_RECOVERY_MAX_100 =
+            0.40
+
+        private const val CNN_UNSHADED_RECOVERY_MIN_CONFIDENCE_100 =
+            0.60
+
         @Volatile
         private var openCvInitialized =
             false
@@ -2689,9 +2705,15 @@ class GradeLensOmrModule : Module() {
                                             crossState =
                                                 crossResult.crossState
 
-                                            resolveHybridBubbleRole(
+                                            resolveHybridBubbleRole100(
                                                 cnnLabel =
                                                     prediction.label,
+
+                                                cnnConfidence =
+                                                    prediction.confidence.toDouble(),
+
+                                                coverage =
+                                                    coverageMeasurement.coverage,
 
                                                 coverageRole =
                                                     coverageRole,
@@ -3030,6 +3052,129 @@ class GradeLensOmrModule : Module() {
          * possible_cross alone is intentionally not promoted to crossed.
          */
         return "invalid"
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | 100-Item Hybrid Bubble Role Resolver
+    |--------------------------------------------------------------------------
+    |
+    | The 100-item sheet uses smaller, more tightly packed bubbles than the
+    | 50-item sheet. Real camera captures showed a narrow false-invalid band
+    | immediately above the frozen 50-item UNSHADED_MAX of 0.35.
+    |
+    | We do NOT widen the global coverage threshold because that would change
+    | the already-stable 50-item behavior.
+    |
+    | For 100-item sheets only, a borderline physical-coverage result may be
+    | recovered as unshaded when three independent signals agree:
+    |
+    | 1. CNN strongly predicts Unshaded_Bubble.
+    | 2. Coverage is still low (<= 0.40).
+    | 3. The geometric cross detector says not_crossed.
+    |
+    | Definite crosses still have highest priority. Anything outside this
+    | narrow recovery rule keeps the original conservative resolver behavior.
+    |--------------------------------------------------------------------------
+    */
+
+    private fun resolveHybridBubbleRole100(
+        cnnLabel: String,
+        cnnConfidence: Double,
+        coverage: Double,
+        coverageRole: String,
+        crossState: String
+    ): String {
+
+        /*
+         * Rule 1:
+         * A definite geometric cross always wins.
+         */
+        if (
+            crossState ==
+                "definite_cross"
+        ) {
+
+            return "crossed"
+        }
+
+        /*
+         * Rule 2:
+         * 100-item baseline-unshaded recovery.
+         *
+         * Repeated real-phone diagnostics show that clean, physically blank
+         * bubbles on the tighter 100-item layout can land slightly above the
+         * frozen 50-item UNSHADED_MAX (0.35). The remaining false-review
+         * examples are concentrated around 0.338 - 0.365 coverage.
+         *
+         * If physical coverage is still <= 0.37, the geometric detector says
+         * not_crossed, and the CNN is choosing between Unshaded_Bubble and
+         * Invalid_Bubble, treat the bubble as unshaded.
+         *
+         * This is intentionally 100-item-only. The 50-item resolver and the
+         * global 0.35 coverage calibration remain unchanged.
+         *
+         * We do not use CNN confidence in this narrow baseline band because
+         * the diagnostic shows the same clean blank bubbles receiving roughly
+         * 0.50 - 0.60 confidence near the 100-item layout boundary.
+         */
+        if (
+            coverage <=
+                BASELINE_UNSHADED_RECOVERY_MAX_100 &&
+            (
+                cnnLabel ==
+                    "Unshaded_Bubble" ||
+                cnnLabel ==
+                    "Invalid_Bubble"
+                ) &&
+            crossState ==
+                "not_crossed"
+        ) {
+
+            return "unshaded"
+        }
+
+        /*
+         * Rule 3:
+         * Higher borderline-unshaded recovery.
+         *
+         * Between 0.37 and 0.40 we stay more conservative. Recovery is only
+         * allowed when the CNN explicitly predicts Unshaded_Bubble with at
+         * least modest confidence and geometry finds no cross.
+         *
+         * This preserves a review path for partial/light marks that move
+         * farther into the invalid coverage band.
+         */
+        if (
+            coverageRole ==
+                "invalid" &&
+            cnnLabel ==
+                "Unshaded_Bubble" &&
+            cnnConfidence >=
+                CNN_UNSHADED_RECOVERY_MIN_CONFIDENCE_100 &&
+            coverage <=
+                UNSHADED_RECOVERY_MAX_100 &&
+            crossState ==
+                "not_crossed"
+        ) {
+
+            return "unshaded"
+        }
+
+        /*
+         * Rule 4:
+         * Everything else keeps the original conservative hybrid behavior.
+         */
+        return resolveHybridBubbleRole(
+            cnnLabel =
+                cnnLabel,
+
+            coverageRole =
+                coverageRole,
+
+            crossState =
+                crossState
+        )
     }
 
     /*

@@ -31,7 +31,6 @@ import {
 
 import { syncScanBatch } from "@/sync/omrSubmissionSync";
 
-import { AppScreenHeader } from "@/../components/layout/AppScreenHeader";
 import { theme } from "@/../theme";
 
 type BadgeTone = "neutral" | "success" | "warning" | "danger" | "primary";
@@ -127,10 +126,16 @@ export default function BatchDetailsScreen() {
     let failed = 0;
     let synced = 0;
     let syncing = 0;
+    let rejected = 0;
 
     for (const submission of submissions) {
       if (submission.sync_status === "synced") {
         synced++;
+        continue;
+      }
+
+      if (submission.sync_status === "rejected") {
+        rejected++;
         continue;
       }
 
@@ -156,7 +161,8 @@ export default function BatchDetailsScreen() {
       failed,
       synced,
       syncing,
-      outstanding: submissions.length - synced,
+      rejected,
+      outstanding: ready + review + failed,
     };
   }, [submissions]);
 
@@ -230,10 +236,18 @@ export default function BatchDetailsScreen() {
         return;
       }
 
-      if (result.failedCount > 0) {
+      if (result.rejectedCount > 0 && result.failedCount === 0) {
+        Alert.alert(
+          "Batch Completed with Issues",
+          `${result.syncedCount} submission(s) were accepted and ${result.rejectedCount} were not accepted because they conflict with an already finalized result. Those scans will not be retried.`,
+        );
+        return;
+      }
+
+      if (result.failedCount > 0 || result.rejectedCount > 0) {
         Alert.alert(
           "Batch Needs Attention",
-          `${result.syncedCount} submission(s) were accepted and ${result.failedCount} could not be completed. Only unresolved submissions will be retried next time.`,
+          `${result.syncedCount} accepted, ${result.failedCount} retryable failure(s), and ${result.rejectedCount} non-retryable issue(s). Only retryable failures will be attempted again.`,
         );
         return;
       }
@@ -341,21 +355,25 @@ export default function BatchDetailsScreen() {
 
   if (!scanBatchUuid || !batch) {
     return (
-      <View style={styles.screen}>
-        <AppScreenHeader
-          back
-          backLabel="Batch"
-          title="Batch Not Found"
-          subtitle="This local Batch is no longer available on this device."
-        />
+      <View
+        style={[
+          styles.screen,
+          styles.missingScreen,
+          {
+            paddingTop: insets.top + theme.spacing.xl,
+          },
+        ]}
+      >
+        <Pressable onPress={() => router.back()} style={styles.backButton}>
+          <Text style={styles.backButtonText}>‹</Text>
+          <Text style={styles.backButtonLabel}>Batch</Text>
+        </Pressable>
 
-        <View style={styles.missingBody}>
-          <View style={styles.emptyCard}>
-            <Text style={styles.emptyTitle}>No Local Batch Data</Text>
-            <Text style={styles.emptyText}>
-              Return to Batch and choose another saved scan batch.
-            </Text>
-          </View>
+        <View style={styles.emptyCard}>
+          <Text style={styles.emptyTitle}>Batch Not Found</Text>
+          <Text style={styles.emptyText}>
+            This local Batch is no longer available on this device.
+          </Text>
         </View>
       </View>
     );
@@ -384,34 +402,52 @@ export default function BatchDetailsScreen() {
         contentContainerStyle={[
           styles.content,
           {
+            paddingTop: insets.top + theme.spacing.md,
             paddingBottom: insets.bottom + theme.spacing.xxxl,
           },
         ]}
         ListHeaderComponent={
           <>
-            <AppScreenHeader
-              embedded
-              back
-              backLabel="Batch"
-              eyebrow="Scan Batch"
-              title={`Batch #${batch.batch_number}`}
-              subtitle={`${batch.course_code ?? "Course"}${
-                batch.course_test_title ? ` · ${batch.course_test_title}` : ""
-              }`}
-              right={
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Back to Batch list"
+              onPress={() => router.back()}
+              style={({ pressed }) => [
+                styles.backButton,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Text style={styles.backButtonText}>‹</Text>
+              <Text style={styles.backButtonLabel}>Batch</Text>
+            </Pressable>
+
+            <View style={styles.headerCard}>
+              <View style={styles.headerTopRow}>
+                <View style={styles.headerTitleGroup}>
+                  <Text style={styles.eyebrow}>Scan Batch</Text>
+                  <Text style={styles.title}>Batch #{batch.batch_number}</Text>
+                  <Text style={styles.courseLine}>
+                    {batch.course_code ?? "Course"}
+                    {batch.course_test_title
+                      ? ` · ${batch.course_test_title}`
+                      : ""}
+                  </Text>
+                </View>
+
                 <StatusBadge
                   label={batchStatus.label}
                   tone={batchStatus.tone}
                 />
-              }
-            />
+              </View>
 
-            <View style={styles.headerCard}>
               <View style={styles.summaryGrid}>
                 <SummaryItem label="Scans" value={submissions.length} />
                 <SummaryItem label="Ready" value={counts.ready} />
                 <SummaryItem label="Review" value={counts.review} />
-                <SummaryItem label="Failed" value={counts.failed} />
+                <SummaryItem
+                  label="Issues"
+                  value={counts.failed + counts.rejected}
+                />
                 <SummaryItem label="Synced" value={counts.synced} />
               </View>
 
@@ -529,7 +565,13 @@ function SubmissionCard({
         </View>
       ) : null}
 
-      {submission.sync_status === "failed" ? (
+      {submission.sync_status === "rejected" ? (
+        <Text style={styles.failureText}>
+          This scan was not accepted because this student already has a
+          finalized result for this Course Test. Finalized results cannot be
+          replaced by a normal rescan.
+        </Text>
+      ) : submission.sync_status === "failed" ? (
         <Text style={styles.failureText}>
           This submission could not be completed. Submit this Batch again to
           retry only unresolved scans.
@@ -639,6 +681,12 @@ function getSyncPresentation(submission: ParsedLocalOmrSubmission): {
         tone: "success",
       };
 
+    case "rejected":
+      return {
+        label: "Not Accepted",
+        tone: "danger",
+      };
+
     case "failed":
       return {
         label: "Sync Failed",
@@ -671,6 +719,12 @@ function getBatchStatusPresentation(status: LocalScanBatchStatus): {
         tone: "success",
       };
 
+    case "completed_with_issues":
+      return {
+        label: "Completed with Issues",
+        tone: "warning",
+      };
+
     case "needs_attention":
       return {
         label: "Needs Attention",
@@ -693,6 +747,10 @@ function getSubmitButtonLabel(
 ): string {
   if (isSyncing) {
     return "Submitting...";
+  }
+
+  if (batch.status === "completed_with_issues") {
+    return "Batch Complete";
   }
 
   if (outstandingCount <= 0 || batch.status === "submitted") {
@@ -763,8 +821,29 @@ const styles = StyleSheet.create({
     paddingHorizontal: theme.spacing.screenHorizontal,
   },
 
-  missingBody: {
+  missingScreen: {
     paddingHorizontal: theme.spacing.screenHorizontal,
+  },
+
+  backButton: {
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    minHeight: 44,
+    marginBottom: theme.spacing.md,
+  },
+
+  backButtonText: {
+    marginTop: -2,
+    marginRight: 4,
+    fontSize: 34,
+    lineHeight: 34,
+    color: theme.colors.primary,
+  },
+
+  backButtonLabel: {
+    ...theme.typography.bodyStrong,
+    color: theme.colors.primary,
   },
 
   headerCard: {
@@ -777,8 +856,40 @@ const styles = StyleSheet.create({
     ...theme.shadows.card,
   },
 
+  headerTopRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: theme.spacing.md,
+  },
+
+  headerTitleGroup: {
+    flex: 1,
+  },
+
+  eyebrow: {
+    ...theme.typography.sectionTitle,
+    color: theme.colors.primary,
+  },
+
+  title: {
+    marginTop: theme.spacing.xs,
+    ...theme.typography.screenTitle,
+    color: theme.colors.text,
+  },
+
+  courseLine: {
+    marginTop: theme.spacing.sm,
+    ...theme.typography.body,
+    color: theme.colors.textSecondary,
+  },
+
   summaryGrid: {
     flexDirection: "row",
+    marginTop: theme.spacing.xl,
+    paddingTop: theme.spacing.lg,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.colors.divider,
   },
 
   summaryItem: {

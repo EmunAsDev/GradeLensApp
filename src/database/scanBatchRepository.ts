@@ -6,6 +6,7 @@ export type LocalScanBatchStatus =
   | "draft"
   | "submitting"
   | "submitted"
+  | "completed_with_issues"
   | "needs_attention";
 
 export type LocalScanBatch = {
@@ -33,6 +34,7 @@ export type LocalScanBatchSummary = LocalScanBatch & {
   ready_count: number;
   review_count: number;
   attention_count: number;
+  rejected_count: number;
   submitted_count: number;
 };
 
@@ -237,6 +239,17 @@ export async function getScanBatchByUuid(
         COALESCE(
           SUM(
             CASE
+              WHEN os.sync_status = 'rejected'
+                THEN 1
+              ELSE 0
+            END
+          ),
+          0
+        ) AS rejected_count,
+
+        COALESCE(
+          SUM(
+            CASE
               WHEN os.sync_status = 'synced'
                 THEN 1
               ELSE 0
@@ -341,6 +354,17 @@ export async function getScanBatches(): Promise<LocalScanBatchSummary[]> {
         COALESCE(
           SUM(
             CASE
+              WHEN os.sync_status = 'rejected'
+                THEN 1
+              ELSE 0
+            END
+          ),
+          0
+        ) AS rejected_count,
+
+        COALESCE(
+          SUM(
+            CASE
               WHEN os.sync_status = 'synced'
                 THEN 1
               ELSE 0
@@ -398,7 +422,7 @@ export async function markScanBatchStatus(
 
         submitted_at =
           CASE
-            WHEN ? = 'submitted'
+            WHEN ? IN ('submitted', 'completed_with_issues')
               THEN COALESCE(submitted_at, ?)
 
             ELSE submitted_at
@@ -418,6 +442,7 @@ export async function refreshScanBatchStatus(
   const counts = await db.getFirstAsync<{
     total: number;
     synced: number;
+    rejected: number;
     assigned_to_server_batch: number;
   }>(
     `
@@ -434,6 +459,17 @@ export async function refreshScanBatchStatus(
           ),
           0
         ) AS synced,
+
+        COALESCE(
+          SUM(
+            CASE
+              WHEN sync_status = 'rejected'
+                THEN 1
+              ELSE 0
+            END
+          ),
+          0
+        ) AS rejected,
 
         COALESCE(
           SUM(
@@ -461,6 +497,8 @@ export async function refreshScanBatchStatus(
 
   if (counts.synced === counts.total) {
     nextStatus = "submitted";
+  } else if (counts.synced + counts.rejected === counts.total) {
+    nextStatus = "completed_with_issues";
   } else if (counts.assigned_to_server_batch > 0) {
     nextStatus = "needs_attention";
   } else {

@@ -34,8 +34,17 @@
           "imageWidth": 76
         }
       ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Gradelens to use the camera to scan answer sheets.",
+          "recordAudioAndroid": false
+        }
+      ],
       "expo-secure-store",
-      "expo-sqlite"
+      "expo-sqlite",
+      "expo-image",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true,

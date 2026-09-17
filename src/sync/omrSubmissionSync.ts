@@ -16,6 +16,7 @@ import {
   markOmrBatchDeferred,
   markOmrBatchFailed,
   markOmrSubmissionFailed,
+  markOmrSubmissionRejected,
   markOmrSubmissionSynced,
   type ParsedLocalOmrSubmission,
 } from "@/database/omrSubmissionRepository";
@@ -31,6 +32,7 @@ export type ScanBatchSyncResult = {
   submissionCount: number;
   syncedCount: number;
   failedCount: number;
+  rejectedCount: number;
 
   rateLimited: boolean;
   retryAfterSeconds: number | null;
@@ -110,15 +112,24 @@ function getOfficialResultForSubmission(
   );
 }
 
+function isAlreadyFinalizedFailure(message: string | null): boolean {
+  return (
+    message?.trim() ===
+    "This student already has a final result for this Course Test."
+  );
+}
+
 async function applyBatchResponse(
   response: BatchSyncResponse,
   localSubmissions: ParsedLocalOmrSubmission[],
 ): Promise<{
   syncedCount: number;
   failedCount: number;
+  rejectedCount: number;
 }> {
   let syncedCount = 0;
   let failedCount = 0;
+  let rejectedCount = 0;
 
   for (const localSubmission of localSubmissions) {
     const serverSubmission = response.submissions.find(
@@ -137,10 +148,24 @@ async function applyBatchResponse(
     }
 
     if (serverSubmission.status === "failed") {
+      const errorMessage =
+        serverSubmission.error_message ??
+        "Laravel failed to process this submission.";
+
+      if (isAlreadyFinalizedFailure(serverSubmission.error_message)) {
+        await markOmrSubmissionRejected(
+          localSubmission.submission_uuid,
+          errorMessage,
+          serverSubmission.status,
+        );
+
+        rejectedCount++;
+        continue;
+      }
+
       await markOmrSubmissionFailed(
         localSubmission.submission_uuid,
-        serverSubmission.error_message ??
-          "Laravel failed to process this submission.",
+        errorMessage,
         serverSubmission.status,
       );
 
@@ -170,6 +195,7 @@ async function applyBatchResponse(
   return {
     syncedCount,
     failedCount,
+    rejectedCount,
   };
 }
 
@@ -245,6 +271,7 @@ async function syncOneServerBatch(
   submissionCount: number;
   syncedCount: number;
   failedCount: number;
+  rejectedCount: number;
   rateLimited: boolean;
   retryAfterSeconds: number | null;
 }> {
@@ -257,6 +284,7 @@ async function syncOneServerBatch(
       submissionCount: 0,
       syncedCount: 0,
       failedCount: 0,
+      rejectedCount: 0,
       rateLimited: false,
       retryAfterSeconds: null,
     };
@@ -271,6 +299,7 @@ async function syncOneServerBatch(
       submissionCount: 0,
       syncedCount: 0,
       failedCount: 0,
+      rejectedCount: 0,
       rateLimited: false,
       retryAfterSeconds: null,
     };
@@ -317,6 +346,7 @@ async function syncOneServerBatch(
       submissionCount: prepared.submissions.length,
       syncedCount: applied.syncedCount,
       failedCount: applied.failedCount,
+      rejectedCount: applied.rejectedCount,
       rateLimited: false,
       retryAfterSeconds: null,
     };
@@ -342,6 +372,7 @@ async function syncOneServerBatch(
         submissionCount: prepared.submissions.length,
         syncedCount: 0,
         failedCount: 0,
+        rejectedCount: 0,
         rateLimited: true,
         retryAfterSeconds,
       };
@@ -357,6 +388,7 @@ async function syncOneServerBatch(
       submissionCount: prepared.submissions.length,
       syncedCount: 0,
       failedCount: prepared.submissions.length,
+      rejectedCount: 0,
       rateLimited: false,
       retryAfterSeconds: null,
     };
@@ -378,6 +410,7 @@ export async function syncScanBatch(
     submissionCount: 0,
     syncedCount: 0,
     failedCount: 0,
+    rejectedCount: 0,
     rateLimited: false,
     retryAfterSeconds: null,
   };
@@ -402,6 +435,7 @@ export async function syncScanBatch(
       result.submissionCount += batch.submissionCount;
       result.syncedCount += batch.syncedCount;
       result.failedCount += batch.failedCount;
+      result.rejectedCount += batch.rejectedCount;
 
       if (batch.rateLimited) {
         result.rateLimited = true;
@@ -432,6 +466,7 @@ export async function syncPendingOmrSubmissions(
     submissionCount: 0,
     syncedCount: 0,
     failedCount: 0,
+    rejectedCount: 0,
     rateLimited: false,
     retryAfterSeconds: null,
   };
@@ -439,7 +474,10 @@ export async function syncPendingOmrSubmissions(
   const batches = await getScanBatches();
 
   for (const batch of batches) {
-    if (batch.status === "submitted") {
+    if (
+      batch.status === "submitted" ||
+      batch.status === "completed_with_issues"
+    ) {
       continue;
     }
 
@@ -458,6 +496,7 @@ export async function syncPendingOmrSubmissions(
     result.submissionCount += batchResult.submissionCount;
     result.syncedCount += batchResult.syncedCount;
     result.failedCount += batchResult.failedCount;
+    result.rejectedCount += batchResult.rejectedCount;
 
     if (batchResult.rateLimited) {
       result.rateLimited = true;

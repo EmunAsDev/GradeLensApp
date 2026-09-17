@@ -276,7 +276,11 @@ export default function CourseTestDetailScreen() {
   );
 
   const finalCount = useMemo(
-    () => students.filter((student) => student.final_score !== null).length,
+    () =>
+      students.filter(
+        (student) =>
+          student.sync_status === "synced" && student.final_score !== null,
+      ).length,
     [students],
   );
 
@@ -358,6 +362,7 @@ type StudentResultCardProps = {
 
 function StudentResultCard({ student, questionCount }: StudentResultCardProps) {
   const status = getResultStatus(student);
+  const visibleFinalScore = status === "synced" ? student.final_score : null;
 
   return (
     <View style={styles.card}>
@@ -384,7 +389,7 @@ function StudentResultCard({ student, questionCount }: StudentResultCardProps) {
 
         <ScoreBox
           label="Final"
-          score={student.final_score}
+          score={visibleFinalScore}
           questionCount={questionCount}
         />
       </View>
@@ -419,12 +424,24 @@ function ScoreBox({ label, score, questionCount }: ScoreBoxProps) {
 type ResultStatus = "not_scanned" | "pending" | "synced";
 
 function getResultStatus(student: LocalCourseTestStudent): ResultStatus {
-  if (student.final_score !== null) {
+  /*
+   * Local workflow state wins over a stale cached final_score. A newly saved
+   * scan is tentative until Batch Sync confirms Laravel's authoritative result.
+   */
+  if (student.sync_status === "pending") {
+    return "pending";
+  }
+
+  if (student.sync_status === "synced" && student.final_score !== null) {
     return "synced";
   }
 
   if (student.tentative_score !== null) {
     return "pending";
+  }
+
+  if (student.final_score !== null) {
+    return "synced";
   }
 
   return "not_scanned";

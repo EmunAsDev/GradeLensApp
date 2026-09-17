@@ -15,7 +15,8 @@ export type LocalOmrSubmissionSyncStatus =
   | "pending"
   | "syncing"
   | "synced"
-  | "failed";
+  | "failed"
+  | "rejected";
 
 export class DuplicateOmrSubmissionError extends Error {
   submission: ParsedLocalOmrSubmission;
@@ -26,6 +27,30 @@ export class DuplicateOmrSubmissionError extends Error {
     );
 
     this.name = "DuplicateOmrSubmissionError";
+    this.submission = submission;
+  }
+}
+
+export class FinalizedCourseTestResultError extends Error {
+  finalScore: number;
+
+  constructor(finalScore: number) {
+    super("This student already has a finalized result for this Course Test.");
+
+    this.name = "FinalizedCourseTestResultError";
+    this.finalScore = finalScore;
+  }
+}
+
+export class ExistingStudentOmrSubmissionError extends Error {
+  submission: ParsedLocalOmrSubmission;
+
+  constructor(submission: ParsedLocalOmrSubmission) {
+    super(
+      `Student ${submission.student_id_no} already has a local scan for this Course Test.`,
+    );
+
+    this.name = "ExistingStudentOmrSubmissionError";
     this.submission = submission;
   }
 }
@@ -262,6 +287,27 @@ export async function savePendingOmrSubmission(
   const submissionUuid = input.submission_uuid.trim();
   const sheetUuid = input.sheet_uuid.trim();
 
+  /*
+   * A Laravel-finalized result is immutable. Mobile must not create a new
+   * pending scan that can never be accepted by the server.
+   */
+  const finalizedResult = await db.getFirstAsync<{
+    final_score: number | null;
+  }>(
+    `
+      SELECT final_score
+      FROM course_test_results
+      WHERE crs_tst_id = ?
+        AND std_id = ?
+      LIMIT 1
+    `,
+    [input.crs_tst_id, input.std_id],
+  );
+
+  if (finalizedResult && finalizedResult.final_score !== null) {
+    throw new FinalizedCourseTestResultError(finalizedResult.final_score);
+  }
+
   const duplicate = await db.getFirstAsync<LocalOmrSubmission>(
     `
       SELECT
@@ -280,6 +326,32 @@ export async function savePendingOmrSubmission(
 
   if (duplicate) {
     throw new DuplicateOmrSubmissionError(parseStoredSubmission(duplicate));
+  }
+
+  /*
+   * One student may have only one current scan for a Course Test. To rescan
+   * before submission, the teacher must remove the existing local draft first.
+   */
+  const existingStudentSubmission = await db.getFirstAsync<LocalOmrSubmission>(
+    `
+        SELECT
+          ${SELECT_COLUMNS}
+
+        FROM omr_submissions
+
+        WHERE crs_tst_id = ?
+          AND std_id = ?
+
+        ORDER BY created_at DESC
+        LIMIT 1
+      `,
+    [input.crs_tst_id, input.std_id],
+  );
+
+  if (existingStudentSubmission) {
+    throw new ExistingStudentOmrSubmissionError(
+      parseStoredSubmission(existingStudentSubmission),
+    );
   }
 
   const now = new Date().toISOString();
@@ -397,7 +469,8 @@ export async function savePendingOmrSubmission(
         DO UPDATE SET
           tentative_score = excluded.tentative_score,
           sync_status = 'pending',
-          updated_at = excluded.updated_at
+          updated_at = excluded.updated_at,
+          synced_at = NULL
       `,
       [input.crs_tst_id, input.std_id, input.tentative_score, now],
     );
@@ -540,7 +613,7 @@ export async function markOmrBatchDeferred(
         updated_at = ?
 
       WHERE batch_uuid = ?
-        AND sync_status != 'synced'
+        AND sync_status IN ('pending', 'syncing', 'failed')
     `,
     [message, new Date().toISOString(), batchUuid],
   );
@@ -562,7 +635,7 @@ export async function markOmrBatchFailed(
         updated_at = ?
 
       WHERE batch_uuid = ?
-        AND sync_status != 'synced'
+        AND sync_status IN ('pending', 'syncing', 'failed')
     `,
     [errorMessage, new Date().toISOString(), batchUuid],
   );
@@ -581,6 +654,30 @@ export async function markOmrSubmissionFailed(
 
       SET
         sync_status = 'failed',
+        server_status = ?,
+        last_error = ?,
+        updated_at = ?
+
+      WHERE submission_uuid = ?
+        AND sync_status NOT IN ('synced', 'rejected')
+    `,
+    [serverStatus, errorMessage, new Date().toISOString(), submissionUuid],
+  );
+}
+
+export async function markOmrSubmissionRejected(
+  submissionUuid: string,
+  errorMessage: string,
+  serverStatus: string | null = null,
+): Promise<void> {
+  const db = await getDatabase();
+
+  await db.runAsync(
+    `
+      UPDATE omr_submissions
+
+      SET
+        sync_status = 'rejected',
         server_status = ?,
         last_error = ?,
         updated_at = ?
