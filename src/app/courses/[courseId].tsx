@@ -230,7 +230,6 @@ export default function CourseTestsScreen() {
       <AppScreenHeader
         back
         backLabel="Courses"
-        eyebrow="GradeLens"
         title="Course Tests"
         subtitle="Tests saved for this course and available to this device."
       />

@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "gradelens-app",
-    "slug": "gradelens-app",
+    "name": "GradeLens",
+    "slug": "gradelens",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "gradelensapp",
+    "scheme": "gradelens",
     "userInterfaceStyle": "automatic",
     "ios": {
       "icon": "./assets/expo.icon"
@@ -18,7 +18,10 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.gradelensapp"
+      "package": "com.um.gradelens",
+      "permissions": [
+        "android.permission.CAMERA"
+      ]
     },
     "web": {
       "output": "static",
@@ -49,6 +52,12 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "58702853-87ea-4a4d-80d5-bed59e6ba23b"
+      }
     }
   }
 }

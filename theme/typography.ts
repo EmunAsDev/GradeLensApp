@@ -1,12 +1,12 @@
 export const typography = {
   screenTitle: {
-    fontSize: 28,
+    fontSize: 20,
     lineHeight: 34,
     fontWeight: "700" as const,
   },
 
   sectionTitle: {
-    fontSize: 13,
+    fontSize: 12,
     lineHeight: 18,
     fontWeight: "700" as const,
   },

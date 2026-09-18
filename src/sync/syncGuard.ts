@@ -28,6 +28,7 @@ type RunGuardedSyncOptions<T> = {
   task: () => Promise<T>;
 
   ignoreCooldown?: boolean;
+  recordSuccess?: boolean;
 };
 
 const activeSyncs = new Set<string>();
@@ -41,6 +42,7 @@ export async function runGuardedSync<T>(
     cooldownMs,
     task,
     ignoreCooldown = false,
+    recordSuccess = true,
   } = options;
 
   validateOptions(employeeId, syncKey, cooldownMs);
@@ -86,12 +88,22 @@ export async function runGuardedSync<T>(
     const data = await task();
 
     /*
-     * Only successful synchronization starts the cooldown.
+     * Only callers that own a cooldown record the successful sync timestamp.
+     *
+     * Manual Settings sync:
+     * - recordSuccess = true
+     * - starts/resets the 5-minute cooldown
+     *
+     * Login full sync:
+     * - recordSuccess = false
+     * - never starts/resets the Settings cooldown
      *
      * Network failures, HTTP failures, and thrown errors are intentionally
      * NOT recorded here, so the user can retry after fixing the connection.
      */
-    await markSyncSuccessful(employeeId, syncKey);
+    if (recordSuccess) {
+      await markSyncSuccessful(employeeId, syncKey);
+    }
 
     return {
       status: "completed",

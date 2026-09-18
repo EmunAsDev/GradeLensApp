@@ -1,16 +1,12 @@
-import { Tabs } from "expo-router";
+import { router, Tabs } from "expo-router";
 
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, useWindowDimensions, View } from "react-native";
+
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppTabIcon } from "@/../components/navigation/AppTabIcon";
-import { theme } from "@/../theme";
+import { isCompactWidth, theme } from "@/../theme";
 
-/*
- * Custom button for normal tabs.
- *
- * We use our own Pressable so Android does not show the
- * default circular ripple when a navigation item is pressed.
- */
 function TabButton(props: any) {
   const {
     children,
@@ -31,56 +27,89 @@ function TabButton(props: any) {
       onPress={onPress}
       onLongPress={onLongPress}
       android_ripple={null}
-      style={({ pressed }) => [style, pressed && styles.tabButtonPressed]}
+      style={({ pressed }) => [
+        style,
+        styles.tabButton,
+        pressed && styles.tabButtonPressed,
+      ]}
     >
       {children}
     </Pressable>
   );
 }
 
-/*
- * Special raised Scan button.
- *
- * This remains circular because the circle is part of the
- * GradeLens Scan button design, not the Android press ripple.
- */
-function ScanTabButton(props: any) {
-  const { onPress, onLongPress, accessibilityState } = props;
+function ScanTabButton(
+  props: any & {
+    compact: boolean;
+  },
+) {
+  const { onLongPress, accessibilityState, compact } = props;
 
-  const selected = Boolean(accessibilityState?.selected);
+  const size = compact
+    ? theme.layout.tabBar.scanButtonSizeCompact
+    : theme.layout.tabBar.scanButtonSize;
+
+  const offset = compact
+    ? theme.layout.tabBar.scanButtonOffsetCompact
+    : theme.layout.tabBar.scanButtonOffset;
 
   return (
-    <View style={styles.scanButtonSlot}>
+    <View style={styles.scanSlot}>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Scan answer sheets"
         accessibilityState={accessibilityState}
-        onPress={onPress}
+        onPress={() => router.push("/scan-camera")}
         onLongPress={onLongPress}
         android_ripple={null}
         style={({ pressed }) => [
-          styles.scanTabButton,
-          pressed && styles.scanTabButtonPressed,
+          styles.scanButton,
+          {
+            width: size,
+            height: size,
+            borderRadius: size / 2,
+            marginTop: offset,
+          },
+          pressed && styles.scanButtonPressed,
         ]}
       >
-        <View style={[styles.scanCircle, selected && styles.scanCircleActive]}>
+        <View style={styles.scanIcon}>
           <AppTabIcon
             icon="scan"
             color={theme.colors.textInverse}
             focused
-            size={27}
+            size={
+              compact
+                ? theme.layout.tabBar.scanIconSizeCompact
+                : theme.layout.tabBar.scanIconSize
+            }
           />
         </View>
-
-        <Text style={[styles.scanLabel, selected && styles.scanLabelActive]}>
-          Scan
-        </Text>
       </Pressable>
     </View>
   );
 }
 
 export default function TabsLayout() {
+  const { width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+
+  const compact = isCompactWidth(width);
+
+  const baseHeight = compact
+    ? theme.layout.tabBar.heightCompact
+    : theme.layout.tabBar.height;
+
+  const iconSize = compact
+    ? theme.layout.tabBar.iconSizeCompact
+    : theme.layout.tabBar.iconSize;
+
+  const labelSize = compact
+    ? theme.layout.tabBar.labelSizeCompact
+    : theme.layout.tabBar.labelSize;
+
+  const bottomInset = Math.max(insets.bottom, compact ? 4 : theme.spacing.sm);
+
   return (
     <Tabs
       screenOptions={{
@@ -91,43 +120,59 @@ export default function TabsLayout() {
 
         tabBarHideOnKeyboard: true,
 
-        /*
-         * Replace the default React Navigation tab button.
-         *
-         * This removes the Android circular ripple effect.
-         */
         tabBarButton: (props) => <TabButton {...props} />,
 
+        tabBarBackground: () => (
+          <View style={StyleSheet.absoluteFill}>
+            <View
+              style={[
+                styles.systemNavigationDivider,
+                {
+                  bottom: bottomInset,
+                },
+              ]}
+            />
+          </View>
+        ),
+
         tabBarStyle: {
+          height: baseHeight + bottomInset,
+
+          paddingTop: compact ? 6 : 8,
+          paddingBottom: bottomInset,
+
           backgroundColor: theme.colors.surface,
+
           borderTopWidth: StyleSheet.hairlineWidth,
           borderTopColor: theme.colors.border,
-          elevation: 0,
-          shadowOpacity: 0,
+
+          elevation: 6,
+
+          shadowColor: "#000000",
+          shadowOffset: {
+            width: 0,
+            height: -2,
+          },
+          shadowOpacity: 0.06,
+          shadowRadius: 6,
+
+          overflow: "visible",
         },
 
-        tabBarItemStyle: {
-          paddingTop: theme.spacing.xs,
-        },
-
-        tabBarLabelStyle: {
-          marginTop: 1,
-          fontSize: theme.typography.label.fontSize,
-          fontWeight: theme.typography.label.fontWeight,
-        },
-
-        sceneStyle: {
-          backgroundColor: theme.colors.background,
-        },
+        // ...
       }}
     >
       <Tabs.Screen
         name="index"
         options={{
           title: "Home",
-
           tabBarIcon: ({ color, focused }) => (
-            <AppTabIcon icon="home" color={color as string} focused={focused} />
+            <AppTabIcon
+              icon="home"
+              color={color as string}
+              focused={focused}
+              size={iconSize}
+            />
           ),
         }}
       />
@@ -136,12 +181,12 @@ export default function TabsLayout() {
         name="courses"
         options={{
           title: "Courses",
-
           tabBarIcon: ({ color, focused }) => (
             <AppTabIcon
               icon="courses"
               color={color as string}
               focused={focused}
+              size={iconSize}
             />
           ),
         }}
@@ -151,12 +196,10 @@ export default function TabsLayout() {
         name="scan"
         options={{
           title: "Scan",
-
-          /*
-           * Override the normal tab button because Scan has
-           * its own raised circular button.
-           */
-          tabBarButton: (props) => <ScanTabButton {...props} />,
+          tabBarLabel: () => null,
+          tabBarButton: (props) => (
+            <ScanTabButton {...props} compact={compact} />
+          ),
         }}
       />
 
@@ -164,12 +207,12 @@ export default function TabsLayout() {
         name="batch"
         options={{
           title: "Batch",
-
           tabBarIcon: ({ color, focused }) => (
             <AppTabIcon
               icon="batch"
               color={color as string}
               focused={focused}
+              size={iconSize}
             />
           ),
         }}
@@ -179,12 +222,12 @@ export default function TabsLayout() {
         name="settings"
         options={{
           title: "Settings",
-
           tabBarIcon: ({ color, focused }) => (
             <AppTabIcon
               icon="settings"
               color={color as string}
               focused={focused}
+              size={iconSize}
             />
           ),
         }}
@@ -194,73 +237,43 @@ export default function TabsLayout() {
 }
 
 const styles = StyleSheet.create({
-  /*
-   * Normal navigation tabs.
-   *
-   * Instead of a circular ripple, pressing a tab only gives
-   * a very small opacity response.
-   */
-  tabButtonPressed: {
-    opacity: 0.72,
-  },
-
-  /*
-   * Scan Tab
-   */
-  scanButtonSlot: {
-    flex: 1,
-    alignItems: "center",
-  },
-
-  scanTabButton: {
-    alignItems: "center",
-    justifyContent: "flex-start",
-    marginTop: -14,
-  },
-
-  scanTabButtonPressed: {
-    opacity: 0.82,
-  },
-
-  scanCircle: {
-    width: 56,
-    height: 56,
-
+  tabButton: {
     alignItems: "center",
     justifyContent: "center",
+  },
 
-    borderWidth: 4,
-    borderColor: theme.colors.surface,
-    borderRadius: 28,
+  tabButtonPressed: {
+    opacity: 0.7,
+  },
 
+  scanSlot: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  scanButton: {
+    alignItems: "center",
+    justifyContent: "center",
     backgroundColor: theme.colors.primary,
-
-    shadowColor: "#000000",
-
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-
-    shadowOpacity: 0.16,
-    shadowRadius: 6,
-
-    elevation: 7,
   },
 
-  scanCircleActive: {
+  scanIcon: {
+    transform: [{ translateX: 1 }],
+  },
+
+  scanButtonPressed: {
     backgroundColor: theme.colors.primaryPressed,
+    transform: [{ scale: 0.96 }],
   },
 
-  scanLabel: {
-    marginTop: 2,
+  systemNavigationDivider: {
+    position: "absolute",
+    left: 0,
+    right: 0,
 
-    ...theme.typography.label,
+    height: StyleSheet.hairlineWidth,
 
-    color: theme.colors.textMuted,
-  },
-
-  scanLabelActive: {
-    color: theme.colors.primary,
+    backgroundColor: theme.colors.border,
   },
 });

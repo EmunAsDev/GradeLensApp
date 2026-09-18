@@ -1,12 +1,18 @@
 import type { ReactNode } from "react";
 
 import type { StyleProp, ViewStyle } from "react-native";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import {
+  Pressable,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from "react-native";
 
 import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { theme } from "@/../theme";
+import { getScreenHorizontalPadding, isCompactWidth, theme } from "@/../theme";
 
 type AppScreenHeaderProps = {
   eyebrow?: string;
@@ -21,7 +27,11 @@ type AppScreenHeaderProps = {
 
   /*
    * Set embedded when the parent already owns horizontal screen padding.
-   * Safe-area top spacing is still handled by this component.
+   *
+   * AppScreen should normally be used with embedded=true so both the
+   * header and screen body share the exact same responsive content width.
+   *
+   * Safe-area top spacing is still handled here.
    */
   embedded?: boolean;
 
@@ -40,6 +50,11 @@ export function AppScreenHeader({
   style,
 }: AppScreenHeaderProps) {
   const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
+
+  const compact = isCompactWidth(width);
+
+  const horizontalPadding = getScreenHorizontalPadding(width);
 
   const handleBack = () => {
     if (onBack) {
@@ -55,9 +70,14 @@ export function AppScreenHeader({
       style={[
         styles.container,
         {
-          paddingTop: insets.top + theme.spacing.xl,
+          paddingTop:
+            insets.top + (compact ? theme.spacing.lg : theme.spacing.xl),
+
+          paddingBottom: compact ? theme.spacing.xl : theme.spacing.xxl,
         },
-        !embedded && styles.screenPadding,
+        !embedded && {
+          paddingHorizontal: horizontalPadding,
+        },
         style,
       ]}
     >
@@ -73,7 +93,10 @@ export function AppScreenHeader({
           ]}
         >
           <Text style={styles.backChevron}>‹</Text>
-          <Text style={styles.backLabel}>{backLabel}</Text>
+
+          <Text style={styles.backLabel} numberOfLines={1} ellipsizeMode="tail">
+            {backLabel}
+          </Text>
         </Pressable>
       ) : null}
 
@@ -88,7 +111,11 @@ export function AppScreenHeader({
           {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
         </View>
 
-        {right ? <View style={styles.right}>{right}</View> : null}
+        {right ? (
+          <View style={[styles.right, compact && styles.rightCompact]}>
+            {right}
+          </View>
+        ) : null}
       </View>
     </View>
   );
@@ -96,23 +123,21 @@ export function AppScreenHeader({
 
 const styles = StyleSheet.create({
   container: {
-    paddingBottom: theme.spacing.xxl,
+    width: "100%",
     backgroundColor: theme.colors.background,
   },
 
-  screenPadding: {
-    paddingHorizontal: theme.spacing.screenHorizontal,
-  },
-
   backButton: {
+    maxWidth: "100%",
     alignSelf: "flex-start",
     flexDirection: "row",
     alignItems: "center",
-    minHeight: 32,
+    minHeight: 36,
     marginBottom: theme.spacing.md,
   },
 
   backChevron: {
+    flexShrink: 0,
     marginTop: -2,
     marginRight: theme.spacing.xs,
     fontSize: 30,
@@ -121,11 +146,13 @@ const styles = StyleSheet.create({
   },
 
   backLabel: {
+    flexShrink: 1,
     ...theme.typography.bodyStrong,
     color: theme.colors.primary,
   },
 
   mainRow: {
+    width: "100%",
     flexDirection: "row",
     alignItems: "flex-start",
     justifyContent: "space-between",
@@ -134,6 +161,7 @@ const styles = StyleSheet.create({
 
   titleGroup: {
     flex: 1,
+    minWidth: 0,
   },
 
   eyebrow: {
@@ -142,6 +170,7 @@ const styles = StyleSheet.create({
   },
 
   title: {
+    flexShrink: 1,
     ...theme.typography.screenTitle,
     color: theme.colors.text,
   },
@@ -151,15 +180,21 @@ const styles = StyleSheet.create({
   },
 
   subtitle: {
+    flexShrink: 1,
     marginTop: theme.spacing.sm,
     ...theme.typography.body,
     color: theme.colors.textSecondary,
   },
 
   right: {
+    flexShrink: 0,
     alignItems: "flex-end",
     justifyContent: "flex-start",
     paddingTop: theme.spacing.xs,
+  },
+
+  rightCompact: {
+    maxWidth: "38%",
   },
 
   pressed: {

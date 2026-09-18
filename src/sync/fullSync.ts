@@ -39,6 +39,7 @@ export async function performFullSync(
   employeeId: number,
   options?: {
     ignoreCooldown?: boolean;
+    recordSuccess?: boolean;
   },
 ): Promise<FullSyncResult> {
   return await runGuardedSync({
@@ -49,6 +50,8 @@ export async function performFullSync(
     cooldownMs: FULL_REFERENCE_SYNC_COOLDOWN_MS,
 
     ignoreCooldown: options?.ignoreCooldown ?? false,
+
+    recordSuccess: options?.recordSuccess ?? true,
 
     task: async () => {
       return await performReferenceSync(token);

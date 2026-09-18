@@ -1,15 +1,15 @@
 import { useEffect, useState } from "react";
 
 import {
-    ActivityIndicator,
-    Alert,
-    KeyboardAvoidingView,
-    Platform,
-    Pressable,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from "react-native";
 
 import { router } from "expo-router";
@@ -46,8 +46,6 @@ export default function LoginScreen() {
 
     try {
       await login(cleanUsername, password);
-
-      router.replace("/(tabs)");
     } catch (error) {
       if (error instanceof ApiError) {
         if (error.status === 422) {

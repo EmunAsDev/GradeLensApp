@@ -1,3 +1,4 @@
+import { AppScreenHeader } from "@/../components/layout/AppScreenHeader";
 import { useCallback, useState } from "react";
 
 import {
@@ -8,6 +9,7 @@ import {
   RefreshControl,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from "react-native";
 
@@ -23,8 +25,7 @@ import { syncCourses } from "../../sync/courseSync";
 
 import { runGuardedSync, TARGETED_REFRESH_COOLDOWN_MS } from "@/sync/syncGuard";
 
-import { AppScreenHeader } from "@/../components/layout/AppScreenHeader";
-import { theme } from "@/../theme";
+import { getScreenHorizontalPadding, theme } from "@/../theme";
 
 const COURSES_SYNC_KEY = "courses";
 
@@ -36,6 +37,10 @@ export default function CoursesScreen() {
   const [isLoading, setIsLoading] = useState(true);
 
   const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const { width } = useWindowDimensions();
+
+  const horizontalPadding = getScreenHorizontalPadding(width);
 
   const loadLocalCourses = useCallback(async () => {
     const localCourses = await getCourses();
@@ -125,7 +130,8 @@ export default function CoursesScreen() {
         await loadLocalCourses();
       } catch (error) {
         /*
-         * Existing SQLite data remains visible even when the API request fails.
+         * Existing SQLite data remains visible even when
+         * the API request fails.
          */
         await loadLocalCourses();
 
@@ -176,27 +182,52 @@ export default function CoursesScreen() {
   if (isLoading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" />
+        <ActivityIndicator size="large" color={theme.colors.primary} />
       </View>
     );
   }
 
   return (
     <View style={styles.container}>
-      <AppScreenHeader
-        eyebrow="GradeLens"
-        title="Courses"
-        subtitle="Your synchronized courses and offline course workspace."
-      />
+      <AppScreenHeader eyebrow="GradeLens" title="Courses" />
+
+      <View
+        style={[
+          styles.infoBannerWrapper,
+          {
+            paddingHorizontal: horizontalPadding,
+          },
+        ]}
+      >
+        <View style={styles.infoBanner}>
+          <View accessible={false} style={styles.infoIcon}>
+            <Text style={styles.infoIconText}>i</Text>
+          </View>
+
+          <Text style={styles.infoText}>
+            Your synchronized courses are available for offline use on this
+            device.
+          </Text>
+        </View>
+      </View>
 
       <FlatList
         data={courses}
         keyExtractor={(item) => String(item.crs_id)}
-        contentContainerStyle={
-          courses.length === 0 ? styles.emptyContainer : styles.list
-        }
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={[
+          courses.length === 0 ? styles.emptyContainer : styles.list,
+          {
+            paddingHorizontal: horizontalPadding,
+          },
+        ]}
         refreshControl={
-          <RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} />
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={handleRefresh}
+            tintColor={theme.colors.primary}
+            colors={[theme.colors.primary]}
+          />
         }
         ListEmptyComponent={
           <View style={styles.empty}>
@@ -207,34 +238,54 @@ export default function CoursesScreen() {
             </Text>
           </View>
         }
-        renderItem={({ item }) => (
-          <Pressable
-            onPress={() => {
-              router.push({
-                pathname: "/courses/[courseId]",
+        renderItem={({ item }) => {
+          const title = item.title?.trim() || "Untitled Course";
 
-                params: {
-                  courseId: String(item.crs_id),
-                },
-              });
-            }}
-            style={styles.card}
-          >
-            <Text style={styles.courseCode}>{item.code}</Text>
+          const code = item.code?.trim() || null;
 
-            <Text style={styles.courseTitle}>{item.title}</Text>
+          const description = item.description?.trim() || null;
 
-            <Text style={styles.courseMeta}>
-              {[item.program, item.year, item.section]
-                .filter(Boolean)
-                .join(" • ")}
-            </Text>
+          const time = item.time?.trim() || null;
 
-            {item.room ? (
-              <Text style={styles.courseMeta}>Room: {item.room}</Text>
-            ) : null}
-          </Pressable>
-        )}
+          return (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={code ? `${title}, ${code}` : title}
+              onPress={() => {
+                router.push({
+                  pathname: "/courses/[courseId]",
+
+                  params: {
+                    courseId: String(item.crs_id),
+                  },
+                });
+              }}
+              style={({ pressed }) => [
+                styles.card,
+                pressed && styles.cardPressed,
+              ]}
+            >
+              <Text style={styles.courseTitle}>
+                {title}
+                {code ? ` (${code})` : ""}
+              </Text>
+
+              {description ? (
+                <Text
+                  style={styles.courseDescription}
+                  numberOfLines={3}
+                  ellipsizeMode="tail"
+                >
+                  {description}
+                </Text>
+              ) : null}
+
+              {time ? (
+                <Text style={styles.courseTime}>Time: {time}</Text>
+              ) : null}
+            </Pressable>
+          );
+        }}
       />
     </View>
   );
@@ -247,83 +298,163 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.background,
   },
 
-  list: {
-    padding: 16,
+  infoBannerWrapper: {
+    width: "100%",
 
-    gap: 12,
+    marginBottom: theme.spacing.md,
+  },
+
+  infoBanner: {
+    width: "100%",
+    maxWidth: theme.layout.contentMaxWidth,
+
+    alignSelf: "center",
+    flexDirection: "row",
+    alignItems: "center",
+
+    gap: theme.spacing.sm,
+
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+    borderRadius: theme.radius.md,
+
+    backgroundColor: theme.colors.surfaceMuted,
+  },
+
+  infoIcon: {
+    width: 24,
+    height: 24,
+
+    flexShrink: 0,
+
+    alignItems: "center",
+    justifyContent: "center",
+
+    borderRadius: 12,
+
+    backgroundColor: theme.colors.infoSoft,
+  },
+
+  infoIconText: {
+    marginTop: -1,
+
+    fontSize: 13,
+    lineHeight: 16,
+    fontWeight: "700",
+
+    color: theme.colors.info,
+  },
+
+  infoText: {
+    flex: 1,
+    minWidth: 0,
+
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "400",
+
+    color: theme.colors.textSecondary,
+  },
+
+  list: {
+    width: "100%",
+    maxWidth: theme.layout.contentMaxWidth,
+
+    alignSelf: "center",
+
+    gap: theme.spacing.md,
+
+    paddingBottom: theme.spacing.xxxl,
   },
 
   card: {
-    padding: 16,
+    width: "100%",
+
+    padding: theme.spacing.lg,
 
     borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: theme.radius.md,
 
-    borderColor: "#e5e7eb",
+    backgroundColor: theme.colors.surface,
 
-    borderRadius: 10,
-
-    backgroundColor: "#ffffff",
+    ...theme.shadows.card,
   },
 
-  courseCode: {
-    fontSize: 13,
-
-    fontWeight: "700",
-
-    color: "#a40c0c",
+  cardPressed: {
+    opacity: 0.72,
   },
 
   courseTitle: {
-    marginTop: 5,
+    ...theme.typography.cardTitle,
 
-    fontSize: 17,
-
-    fontWeight: "600",
-
-    color: "#111827",
+    color: theme.colors.text,
   },
 
-  courseMeta: {
-    marginTop: 6,
+  courseDescription: {
+    marginTop: theme.spacing.sm,
 
-    fontSize: 13,
+    ...theme.typography.body,
 
-    color: "#6b7280",
+    color: theme.colors.textSecondary,
+  },
+
+  courseTime: {
+    marginTop: theme.spacing.md,
+
+    ...theme.typography.caption,
+
+    color: theme.colors.textMuted,
   },
 
   center: {
     flex: 1,
 
     alignItems: "center",
-
     justifyContent: "center",
+
+    backgroundColor: theme.colors.background,
   },
 
   emptyContainer: {
     flexGrow: 1,
 
+    width: "100%",
+    maxWidth: theme.layout.contentMaxWidth,
+
+    alignSelf: "center",
     justifyContent: "center",
+
+    paddingBottom: theme.spacing.xxxl,
   },
 
   empty: {
-    padding: 30,
-
     alignItems: "center",
+
+    paddingHorizontal: theme.spacing.xxl,
+    paddingVertical: theme.spacing.xxxl,
   },
 
   emptyTitle: {
-    fontSize: 18,
-
-    fontWeight: "600",
-
-    color: "#111827",
-  },
-
-  emptyText: {
-    marginTop: 8,
+    ...theme.typography.cardTitle,
 
     textAlign: "center",
 
-    color: "#6b7280",
+    color: theme.colors.text,
+  },
+
+  emptyText: {
+    maxWidth: 300,
+
+    marginTop: theme.spacing.sm,
+
+    ...theme.typography.body,
+
+    textAlign: "center",
+
+    color: theme.colors.textSecondary,
   },
 });

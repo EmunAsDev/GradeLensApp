@@ -64,6 +64,14 @@ function RootNavigator() {
         <Stack.Screen name="login" />
 
         <Stack.Screen name="(tabs)" />
+
+        <Stack.Screen
+          name="scan-camera"
+          options={{
+            headerShown: false,
+            animation: "fade",
+          }}
+        />
       </Stack>
     </>
   );

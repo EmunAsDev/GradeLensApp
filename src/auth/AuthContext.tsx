@@ -160,36 +160,49 @@ export function AuthProvider({ children }: AuthProviderProps) {
     });
 
     /*
-     * Authentication succeeds independently from reference-data sync.
+     * Save the authenticated Laravel session first.
      *
-     * Save the session first so the teacher can enter GradeLens immediately.
+     * The employee has already passed authentication at this point. If the
+     * reference-data sync later fails because of connectivity or one resource,
+     * the valid login itself must not be discarded.
      */
     await saveAuthSession(response.token, response.employee);
 
+    /*
+     * Explicit Login Full Sync
+     *
+     * Every successful manual login attempts one fresh reference-data sync.
+     *
+     * Login intentionally:
+     * - ignores any existing Settings cooldown
+     * - does not start/reset the Settings 5-minute cooldown
+     * - does not upload pending scanned submissions
+     *
+     * The Login screen remains in its submitting state until this sync attempt
+     * finishes, because React authentication state is set only afterwards.
+     */
+    try {
+      await performFullSync(response.token, response.employee.id, {
+        ignoreCooldown: true,
+        recordSuccess: false,
+      });
+    } catch (error) {
+      console.error("[LOGIN SYNC] Full synchronization failed:", error);
+
+      /*
+       * Keep the successful authenticated session.
+       *
+       * Existing SQLite data remains available and the teacher can retry
+       * reference synchronization immediately from Settings.
+       */
+    }
+
+    /*
+     * Enter the authenticated application only after the login sync attempt.
+     */
     setToken(response.token);
 
     setEmployee(response.employee);
-
-    /*
-     * Start the initial reference-data synchronization.
-     *
-     * This downloads/updates:
-     * - courses
-     * - course tests
-     * - students + existing final scores
-     * - encrypted OMR packages
-     *
-     * It intentionally does NOT submit scanned papers.
-     *
-     * The persisted employee-scoped cooldown prevents repeated logins or a
-     * Settings sync from immediately launching the same expensive full sync.
-     *
-     * A synchronization failure must not turn a valid Laravel login into a
-     * login failure. Settings can retry reference synchronization later.
-     */
-    void performFullSync(response.token, response.employee.id).catch(() => {
-      // Keep the authenticated local session.
-    });
   }, []);
 
   const logout = useCallback(async () => {
