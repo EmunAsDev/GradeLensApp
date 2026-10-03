@@ -11,34 +11,28 @@ import {
 } from "react-native";
 
 import { router } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ApiError } from "@/api/client";
-
 import { useAuth } from "@/auth/AuthContext";
-
 import { getDeviceUuid } from "@/crypto/deviceKeyStorage";
-
 import { performFullSync } from "@/sync/fullSync";
 
-import { AppScreenHeader } from "@/../components/layout/AppScreenHeader";
+import { AppIcon } from "@/../components/icons/AppIcon";
 import { theme } from "@/../theme";
 
 export default function SettingsScreen() {
   const { token, employee, logout } = useAuth();
+  const insets = useSafeAreaInsets();
 
   const [deviceUuid, setDeviceUuid] = useState<string | null>(null);
-
   const [isSyncing, setIsSyncing] = useState(false);
-
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
-
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   useEffect(() => {
     const loadDevice = async () => {
-      const uuid = await getDeviceUuid();
-
-      setDeviceUuid(uuid);
+      setDeviceUuid(await getDeviceUuid());
     };
 
     void loadDevice();
@@ -47,7 +41,6 @@ export default function SettingsScreen() {
   const handleSync = async () => {
     if (!token || !employee) {
       Alert.alert("Sync", "You are not currently authenticated.");
-
       return;
     }
 
@@ -56,7 +49,6 @@ export default function SettingsScreen() {
     }
 
     setIsSyncing(true);
-
     setSyncStatus("Updating offline GradeLens data...");
 
     try {
@@ -64,7 +56,6 @@ export default function SettingsScreen() {
 
       if (result.status === "in_progress") {
         setSyncStatus("Synchronization is already in progress.");
-
         return;
       }
 
@@ -85,21 +76,14 @@ export default function SettingsScreen() {
 
       const summary = result.data;
 
-      /*
-       * Reload Device UUID
-       */
-      const uuid = await getDeviceUuid();
-
-      setDeviceUuid(uuid);
+      setDeviceUuid(await getDeviceUuid());
 
       setSyncStatus(
-        `Sync complete. ` +
-          `${summary.courseCount} course${
-            summary.courseCount === 1 ? "" : "s"
-          }, ` +
-          `${summary.omrPackagesSynced} OMR package${
-            summary.omrPackagesSynced === 1 ? "" : "s"
-          } synchronized.`,
+        `Updated ${summary.courseCount} course${
+          summary.courseCount === 1 ? "" : "s"
+        } and ${summary.omrPackagesSynced} OMR package${
+          summary.omrPackagesSynced === 1 ? "" : "s"
+        }.`,
       );
 
       const issueCount =
@@ -112,7 +96,7 @@ export default function SettingsScreen() {
             `${summary.courseTestsWithStudentsFailed} roster(s) failed, ` +
             `${summary.omrPackagesSynced} OMR package(s) updated, and ` +
             `${summary.omrPackagesFailed} package(s) failed. ` +
-            `Existing offline data was preserved where updates failed.`,
+            "Existing offline data was preserved where updates failed.",
         );
 
         return;
@@ -126,17 +110,13 @@ export default function SettingsScreen() {
       if (error instanceof ApiError) {
         if (error.status === 401) {
           setSyncStatus("Your session has expired.");
-
           Alert.alert("Session Expired", "Please login again.");
-
           return;
         }
 
         if (error.status === 403) {
           setSyncStatus("Synchronization was not authorized.");
-
           Alert.alert("Sync Failed", error.message);
-
           return;
         }
 
@@ -152,9 +132,7 @@ export default function SettingsScreen() {
         }
 
         setSyncStatus("Synchronization failed.");
-
         Alert.alert("Sync Failed", error.message);
-
         return;
       }
 
@@ -180,7 +158,6 @@ export default function SettingsScreen() {
 
     try {
       await logout();
-
       router.replace("/login");
     } finally {
       setIsLoggingOut(false);
@@ -188,23 +165,23 @@ export default function SettingsScreen() {
   };
 
   const handleLogout = () => {
-    Alert.alert("Logout", "Are you sure you want to logout?", [
-      {
-        text: "Cancel",
-
-        style: "cancel",
-      },
-
-      {
-        text: "Logout",
-
-        style: "destructive",
-
-        onPress: () => {
-          void performLogout();
+    Alert.alert(
+      "Log Out?",
+      "Your GradeLens session will be removed from this device. Previously synchronized offline data will remain available.",
+      [
+        {
+          text: "Cancel",
+          style: "cancel",
         },
-      },
-    ]);
+        {
+          text: "Log Out",
+          style: "destructive",
+          onPress: () => {
+            void performLogout();
+          },
+        },
+      ],
+    );
   };
 
   const fullName = [employee?.firstname, employee?.lastname]
@@ -212,18 +189,27 @@ export default function SettingsScreen() {
     .join(" ");
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <AppScreenHeader
-        eyebrow="GradeLens"
-        title="Settings"
-        subtitle="Account, device, and synchronization."
-      />
+    <View style={styles.screen}>
+      <View
+        style={[
+          styles.header,
+          {
+            paddingTop: insets.top + theme.spacing.sm,
+          },
+        ]}
+      >
+        <Text style={styles.headerTitle}>Settings</Text>
+      </View>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Profile</Text>
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.firstSection}>
+          <Text style={styles.sectionTitle}>Profile</Text>
 
-        <View style={styles.card}>
-          <View style={styles.profileHeader}>
+          <View style={styles.profileCard}>
             <View style={styles.avatar}>
               <Text style={styles.avatarText}>
                 {employee?.firstname?.charAt(0).toUpperCase() ?? "?"}
@@ -231,165 +217,147 @@ export default function SettingsScreen() {
             </View>
 
             <View style={styles.profileMain}>
-              <Text style={styles.profileName}>{fullName || "Faculty"}</Text>
+              <Text style={styles.profileName} numberOfLines={1}>
+                {fullName || "Faculty"}
+              </Text>
 
-              <Text style={styles.profileUsername}>
-                @{employee?.username ?? "unknown"}
+              <Text style={styles.profileEmail} numberOfLines={1}>
+                {employee?.email ?? "No email available"}
               </Text>
             </View>
           </View>
-
-          <View style={styles.divider} />
-
-          <InfoRow
-            label="Employee ID"
-            value={employee?.id != null ? String(employee.id) : "—"}
-          />
-
-          <InfoRow label="Email" value={employee?.email ?? "—"} />
         </View>
-      </View>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Device</Text>
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Synchronization</Text>
 
-        <View style={styles.card}>
-          <View style={styles.deviceStatusRow}>
-            <View>
-              <Text style={styles.infoLabel}>Device Identity</Text>
+          <View style={styles.syncCard}>
+            <Text style={styles.syncTitle}>Offline Data</Text>
 
-              <Text style={styles.deviceStatusText}>
-                {deviceUuid ? "Configured" : "Not configured"}
-              </Text>
-            </View>
+            <Text style={styles.syncDescription}>
+              Synchronize your courses, assigned tests, student rosters,
+              existing results, and OMR packages with GradeLens.
+            </Text>
 
-            <View
-              style={[
-                styles.statusBadge,
-
-                deviceUuid
-                  ? styles.statusBadgeSuccess
-                  : styles.statusBadgeWarning,
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Synchronize offline GradeLens data"
+              disabled={isSyncing}
+              onPress={() => {
+                void handleSync();
+              }}
+              style={({ pressed }) => [
+                styles.syncButton,
+                pressed && !isSyncing && styles.pressed,
+                isSyncing && styles.syncButtonBusy,
               ]}
             >
-              <Text
-                style={[
-                  styles.statusBadgeText,
+              {isSyncing ? (
+                <ActivityIndicator size="small" color={theme.colors.primary} />
+              ) : (
+                <AppIcon name="sync" size={20} color={theme.colors.primary} />
+              )}
 
-                  deviceUuid
-                    ? styles.statusBadgeTextSuccess
-                    : styles.statusBadgeTextWarning,
-                ]}
-              >
-                {deviceUuid ? "Ready" : "Pending"}
+              <Text style={styles.syncButtonText}>
+                {isSyncing ? "Synchronizing..." : "Sync Now"}
               </Text>
-            </View>
+            </Pressable>
+
+            <Text style={styles.syncHint}>
+              {syncStatus ??
+                "Existing offline data remains available when the server cannot be reached."}
+            </Text>
           </View>
-
-          {deviceUuid ? (
-            <>
-              <View style={styles.divider} />
-
-              <Text style={styles.infoLabel}>Device UUID</Text>
-
-              <Text selectable style={styles.deviceUuid}>
-                {deviceUuid}
-              </Text>
-            </>
-          ) : null}
         </View>
-      </View>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Synchronization</Text>
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Additional Settings</Text>
 
-        <View style={styles.card}>
-          <Text style={styles.syncTitle}>Offline Data</Text>
+          <SettingsRow
+            icon="settings"
+            title="Account Security"
+            subtitle={
+              deviceUuid
+                ? "Device identity and login activity"
+                : "Device identity needs attention"
+            }
+            onPress={() => router.push("/settings/account-security")}
+          />
 
-          <Text style={styles.syncDescription}>
-            Synchronize your courses and assigned tests with the GradeLens
-            server.
-          </Text>
-
-          {syncStatus ? (
-            <View style={styles.syncStatus}>
-              <Text style={styles.syncStatusText}>{syncStatus}</Text>
-            </View>
-          ) : null}
+          <SettingsRow
+            icon="info"
+            title="About App"
+            subtitle="Learn how GradeLens scanning, review, offline work, and sync operate"
+            onPress={() => router.push("/settings/about")}
+          />
 
           <Pressable
-            onPress={handleSync}
-            disabled={isSyncing}
-            style={({ pressed }) => [
-              styles.syncButton,
-
-              pressed && !isSyncing && styles.buttonPressed,
-
-              isSyncing && styles.disabledButton,
-            ]}
-          >
-            {isSyncing ? (
-              <View style={styles.buttonContent}>
-                <ActivityIndicator size="small" color="#ffffff" />
-
-                <Text style={styles.syncButtonText}>Synchronizing...</Text>
-              </View>
-            ) : (
-              <Text style={styles.syncButtonText}>Sync Now</Text>
-            )}
-          </Pressable>
-
-          <Text style={styles.syncHint}>
-            Existing local data remains available when the server cannot be
-            reached.
-          </Text>
-        </View>
-      </View>
-
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Account</Text>
-
-        <View style={styles.card}>
-          <Text style={styles.logoutDescription}>
-            Logging out removes your authentication session from this device.
-            Previously synchronized offline data is kept.
-          </Text>
-
-          <Pressable
-            onPress={handleLogout}
+            accessibilityRole="button"
+            accessibilityLabel="Log out of GradeLens"
             disabled={isLoggingOut}
+            onPress={handleLogout}
             style={({ pressed }) => [
-              styles.logoutButton,
-
-              pressed && !isLoggingOut && styles.logoutButtonPressed,
-
-              isLoggingOut && styles.disabledButton,
+              styles.logoutRow,
+              pressed && !isLoggingOut && styles.pressed,
+              isLoggingOut && styles.disabled,
             ]}
           >
-            {isLoggingOut ? (
-              <ActivityIndicator size="small" />
-            ) : (
-              <Text style={styles.logoutButtonText}>Logout</Text>
-            )}
+            <View style={styles.logoutIcon}>
+              {isLoggingOut ? (
+                <ActivityIndicator
+                  size="small"
+                  color={theme.colors.textInverse}
+                />
+              ) : (
+                <AppIcon
+                  name="logout"
+                  size={22}
+                  color={theme.colors.textInverse}
+                />
+              )}
+            </View>
+
+            <Text style={styles.logoutText}>
+              {isLoggingOut ? "Logging Out..." : "Log Out"}
+            </Text>
+
+            <AppIcon name="next" size={24} color={theme.colors.textInverse} />
           </Pressable>
         </View>
-      </View>
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 }
 
-type InfoRowProps = {
-  label: string;
-  value: string;
+type SettingsRowProps = {
+  icon: "settings" | "info";
+  title: string;
+  subtitle: string;
+  onPress: () => void;
 };
 
-function InfoRow({ label, value }: InfoRowProps) {
+function SettingsRow({ icon, title, subtitle, onPress }: SettingsRowProps) {
   return (
-    <View style={styles.infoRow}>
-      <Text style={styles.infoLabel}>{label}</Text>
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={title}
+      onPress={onPress}
+      style={({ pressed }) => [styles.settingsRow, pressed && styles.pressed]}
+    >
+      <View style={styles.settingsRowIcon}>
+        <AppIcon name={icon} size={24} color={theme.colors.text} />
+      </View>
 
-      <Text style={styles.infoValue}>{value}</Text>
-    </View>
+      <View style={styles.settingsRowMain}>
+        <Text style={styles.settingsRowTitle}>{title}</Text>
+
+        <Text style={styles.settingsRowSubtitle} numberOfLines={2}>
+          {subtitle}
+        </Text>
+      </View>
+
+      <AppIcon name="next" size={24} color={theme.colors.text} />
+    </Pressable>
   );
 }
 
@@ -406,305 +374,209 @@ function formatRemainingTime(remainingMs: number): string {
 }
 
 const styles = StyleSheet.create({
-  container: {
+  screen: {
     flex: 1,
-
     backgroundColor: theme.colors.background,
   },
 
+  container: {
+    flex: 1,
+  },
+
+  header: {
+    minHeight: 68,
+    justifyContent: "flex-end",
+    paddingHorizontal: theme.spacing.screenHorizontal,
+    paddingBottom: theme.spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.colors.divider,
+    backgroundColor: theme.colors.surface,
+  },
+
+  headerTitle: {
+    ...theme.typography.screenTitle,
+    color: theme.colors.text,
+  },
+
   content: {
-    paddingBottom: 40,
+    paddingHorizontal: theme.spacing.screenHorizontal,
+    paddingTop: theme.spacing.lg,
+    paddingBottom: 48,
+  },
+
+  firstSection: {
+    marginTop: 0,
   },
 
   section: {
-    marginTop: 22,
-
-    paddingHorizontal: 16,
+    marginTop: theme.spacing.xxl,
   },
 
   sectionTitle: {
-    marginBottom: 8,
-
-    marginLeft: 2,
-
-    fontSize: 13,
-
-    fontWeight: "700",
-
-    textTransform: "uppercase",
-
-    letterSpacing: 0.6,
-
-    color: "#6b7280",
+    marginBottom: theme.spacing.sm,
+    ...theme.typography.sectionTitle,
+    color: theme.colors.text,
   },
 
-  card: {
-    padding: 16,
-
-    borderWidth: 1,
-
-    borderColor: "#e5e7eb",
-
-    borderRadius: 12,
-
-    backgroundColor: "#ffffff",
-  },
-
-  profileHeader: {
+  profileCard: {
     flexDirection: "row",
-
     alignItems: "center",
+    minHeight: 88,
+    paddingHorizontal: theme.spacing.xl,
+    paddingVertical: theme.spacing.md,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.surface,
+    ...theme.shadows.card,
   },
 
   avatar: {
-    width: 52,
-
-    height: 52,
-
+    width: 58,
+    height: 58,
     alignItems: "center",
-
     justifyContent: "center",
-
-    borderRadius: 26,
-
-    backgroundColor: "#a40c0c",
+    borderRadius: 29,
+    backgroundColor: theme.colors.primary,
   },
 
   avatarText: {
     fontSize: 22,
-
+    lineHeight: 28,
     fontWeight: "700",
-
-    color: "#ffffff",
+    color: theme.colors.textInverse,
   },
 
   profileMain: {
     flex: 1,
-
-    marginLeft: 14,
+    minWidth: 0,
+    marginLeft: theme.spacing.lg,
   },
 
   profileName: {
-    fontSize: 18,
-
-    fontWeight: "700",
-
-    color: "#111827",
+    ...theme.typography.cardTitle,
+    color: theme.colors.text,
   },
 
-  profileUsername: {
-    marginTop: 3,
-
-    fontSize: 13,
-
-    color: "#6b7280",
+  profileEmail: {
+    marginTop: 2,
+    ...theme.typography.caption,
+    color: theme.colors.textSecondary,
   },
 
-  divider: {
-    height: 1,
-
-    marginVertical: 16,
-
-    backgroundColor: "#e5e7eb",
-  },
-
-  infoRow: {
-    marginBottom: 14,
-  },
-
-  infoLabel: {
-    fontSize: 12,
-
-    fontWeight: "600",
-
-    color: "#6b7280",
-  },
-
-  infoValue: {
-    marginTop: 4,
-
-    fontSize: 15,
-
-    color: "#111827",
-  },
-
-  deviceStatusRow: {
-    flexDirection: "row",
-
-    alignItems: "center",
-
-    justifyContent: "space-between",
-  },
-
-  deviceStatusText: {
-    marginTop: 4,
-
-    fontSize: 15,
-
-    fontWeight: "600",
-
-    color: "#111827",
-  },
-
-  statusBadge: {
-    paddingHorizontal: 10,
-
-    paddingVertical: 5,
-
-    borderRadius: 999,
-  },
-
-  statusBadgeSuccess: {
-    backgroundColor: "#dcfce7",
-  },
-
-  statusBadgeWarning: {
-    backgroundColor: "#fef3c7",
-  },
-
-  statusBadgeText: {
-    fontSize: 12,
-
-    fontWeight: "700",
-  },
-
-  statusBadgeTextSuccess: {
-    color: "#166534",
-  },
-
-  statusBadgeTextWarning: {
-    color: "#92400e",
-  },
-
-  deviceUuid: {
-    marginTop: 6,
-
-    fontSize: 12,
-
-    lineHeight: 18,
-
-    color: "#374151",
+  syncCard: {
+    paddingHorizontal: theme.spacing.xl,
+    paddingVertical: theme.spacing.md,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.surface,
+    ...theme.shadows.card,
   },
 
   syncTitle: {
-    fontSize: 16,
-
-    fontWeight: "700",
-
-    color: "#111827",
+    ...theme.typography.cardTitle,
+    color: theme.colors.text,
   },
 
   syncDescription: {
-    marginTop: 6,
-
-    fontSize: 14,
-
-    lineHeight: 20,
-
-    color: "#6b7280",
-  },
-
-  syncStatus: {
-    marginTop: 14,
-
-    padding: 12,
-
-    borderRadius: 8,
-
-    backgroundColor: "#f3f4f6",
-  },
-
-  syncStatusText: {
-    fontSize: 13,
-
-    lineHeight: 18,
-
-    color: "#374151",
+    marginTop: 3,
+    ...theme.typography.caption,
+    color: theme.colors.textSecondary,
   },
 
   syncButton: {
-    height: 48,
-
-    marginTop: 16,
-
+    minHeight: 48,
+    flexDirection: "row",
     alignItems: "center",
-
     justifyContent: "center",
-
-    borderRadius: 8,
-
-    backgroundColor: "#a40c0c",
+    gap: theme.spacing.sm,
+    marginTop: theme.spacing.md,
+    borderWidth: 1,
+    borderColor: theme.colors.primary,
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.surface,
   },
 
-  buttonContent: {
-    flexDirection: "row",
-
-    alignItems: "center",
-
-    gap: 9,
+  syncButtonBusy: {
+    backgroundColor: theme.colors.primarySoft,
   },
 
   syncButtonText: {
-    fontSize: 15,
-
-    fontWeight: "700",
-
-    color: "#ffffff",
+    ...theme.typography.bodyStrong,
+    color: theme.colors.primary,
   },
 
   syncHint: {
-    marginTop: 11,
-
-    fontSize: 12,
-
-    lineHeight: 17,
-
-    color: "#9ca3af",
+    marginTop: theme.spacing.sm,
+    ...theme.typography.caption,
+    color: theme.colors.textMuted,
   },
 
-  logoutDescription: {
-    fontSize: 14,
-
-    lineHeight: 20,
-
-    color: "#6b7280",
-  },
-
-  logoutButton: {
-    height: 46,
-
-    marginTop: 16,
-
+  settingsRow: {
+    flexDirection: "row",
     alignItems: "center",
-
-    justifyContent: "center",
-
+    minHeight: 64,
+    paddingHorizontal: theme.spacing.lg,
+    paddingVertical: theme.spacing.sm,
+    marginBottom: theme.spacing.sm,
     borderWidth: 1,
-
-    borderColor: "#a40c0c",
-
-    borderRadius: 8,
-
-    backgroundColor: "#ffffff",
+    borderColor: theme.colors.border,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.surface,
+    ...theme.shadows.card,
   },
 
-  logoutButtonPressed: {
-    backgroundColor: "#fef2f2",
+  settingsRowIcon: {
+    width: 42,
+    alignItems: "flex-start",
+    justifyContent: "center",
   },
 
-  logoutButtonText: {
-    fontSize: 15,
-
-    fontWeight: "700",
-
-    color: "#a40c0c",
+  settingsRowMain: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: theme.spacing.sm,
   },
 
-  buttonPressed: {
-    opacity: 0.88,
+  settingsRowTitle: {
+    ...theme.typography.bodyStrong,
+    color: theme.colors.text,
   },
 
-  disabledButton: {
-    opacity: 0.6,
+  settingsRowSubtitle: {
+    marginTop: 1,
+    ...theme.typography.caption,
+    color: theme.colors.textMuted,
+  },
+
+  logoutRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    minHeight: 58,
+    paddingHorizontal: theme.spacing.lg,
+    marginTop: theme.spacing.xs,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.danger,
+  },
+
+  logoutIcon: {
+    width: 42,
+    alignItems: "flex-start",
+    justifyContent: "center",
+  },
+
+  logoutText: {
+    flex: 1,
+    ...theme.typography.bodyStrong,
+    color: theme.colors.textInverse,
+  },
+
+  pressed: {
+    opacity: 0.76,
+  },
+
+  disabled: {
+    opacity: 0.55,
   },
 });

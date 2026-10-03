@@ -443,7 +443,10 @@ export async function refreshScanBatchStatus(
     total: number;
     synced: number;
     rejected: number;
-    assigned_to_server_batch: number;
+    failed: number;
+    syncing: number;
+    pending_ready: number;
+    pending_review: number;
   }>(
     `
       SELECT
@@ -474,13 +477,48 @@ export async function refreshScanBatchStatus(
         COALESCE(
           SUM(
             CASE
-              WHEN batch_uuid IS NOT NULL
+              WHEN sync_status = 'failed'
                 THEN 1
               ELSE 0
             END
           ),
           0
-        ) AS assigned_to_server_batch
+        ) AS failed,
+
+        COALESCE(
+          SUM(
+            CASE
+              WHEN sync_status = 'syncing'
+                THEN 1
+              ELSE 0
+            END
+          ),
+          0
+        ) AS syncing,
+
+        COALESCE(
+          SUM(
+            CASE
+              WHEN sync_status = 'pending'
+                AND requires_review = 0
+                THEN 1
+              ELSE 0
+            END
+          ),
+          0
+        ) AS pending_ready,
+
+        COALESCE(
+          SUM(
+            CASE
+              WHEN sync_status = 'pending'
+                AND requires_review = 1
+                THEN 1
+              ELSE 0
+            END
+          ),
+          0
+        ) AS pending_review
 
       FROM omr_submissions
 
@@ -499,9 +537,23 @@ export async function refreshScanBatchStatus(
     nextStatus = "submitted";
   } else if (counts.synced + counts.rejected === counts.total) {
     nextStatus = "completed_with_issues";
-  } else if (counts.assigned_to_server_batch > 0) {
+  } else if (counts.failed > 0 || counts.rejected > 0) {
+    /*
+     * Only real delivery/server problems are "needs_attention".
+     *
+     * A normal Needs Review paper remains a local draft and is not an error.
+     */
     nextStatus = "needs_attention";
+  } else if (counts.syncing > 0) {
+    nextStatus = "submitting";
   } else {
+    /*
+     * Includes:
+     * - ready papers waiting for sync;
+     * - Needs Review papers waiting for faculty clarification;
+     * - a partially synced local scanning session whose remaining papers are
+     *   still valid local drafts.
+     */
     nextStatus = "draft";
   }
 

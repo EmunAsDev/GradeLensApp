@@ -159,7 +159,15 @@ export default function TabsLayout() {
           overflow: "visible",
         },
 
-        // ...
+        tabBarLabelStyle: {
+          fontSize: labelSize,
+          fontWeight: "600",
+          lineHeight: compact ? 13 : 14,
+        },
+
+        tabBarItemStyle: {
+          paddingTop: 1,
+        },
       }}
     >
       <Tabs.Screen

@@ -200,6 +200,15 @@ export async function initializeDatabase(): Promise<void> {
       review_question_numbers_json TEXT NOT NULL,
       counts_json TEXT NOT NULL,
 
+      /*
+       * Local-only faculty clarification state.
+       *
+       * The original native questions_json remains immutable evidence.
+       * This JSON stores pre-sync faculty resolutions so they survive app
+       * restarts without requiring a Laravel schema change.
+       */
+      local_review_json TEXT,
+
       tentative_score REAL NOT NULL,
 
       scan_batch_uuid TEXT,
@@ -320,6 +329,10 @@ async function upgradeOmrSubmissionSchema(
       name: "is_flagged",
       sql: "ALTER TABLE omr_submissions ADD COLUMN is_flagged INTEGER",
     },
+    {
+      name: "local_review_json",
+      sql: "ALTER TABLE omr_submissions ADD COLUMN local_review_json TEXT",
+    },
   ];
 
   for (const addition of additions) {
@@ -392,6 +405,7 @@ async function upgradeOmrSubmissionSchema(
         questions_json TEXT NOT NULL,
         review_question_numbers_json TEXT NOT NULL,
         counts_json TEXT NOT NULL,
+        local_review_json TEXT,
 
         tentative_score REAL NOT NULL,
 
@@ -427,6 +441,7 @@ async function upgradeOmrSubmissionSchema(
         questions_json,
         review_question_numbers_json,
         counts_json,
+        local_review_json,
         tentative_score,
         scan_batch_uuid,
         batch_uuid,
@@ -455,6 +470,7 @@ async function upgradeOmrSubmissionSchema(
         questions_json,
         review_question_numbers_json,
         counts_json,
+        local_review_json,
         tentative_score,
         scan_batch_uuid,
         batch_uuid,

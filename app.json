@@ -7,9 +7,11 @@
     "icon": "./assets/images/icon.png",
     "scheme": "gradelens",
     "userInterfaceStyle": "automatic",
+
     "ios": {
       "icon": "./assets/expo.icon"
     },
+
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
@@ -19,42 +21,54 @@
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.um.gradelens",
-      "permissions": [
-        "android.permission.CAMERA"
-      ]
+      "permissions": ["android.permission.CAMERA"]
     },
+
     "web": {
       "output": "static",
       "favicon": "./assets/images/favicon.png"
     },
+
     "plugins": [
       "expo-router",
+
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 76
+          "backgroundColor": "#FFFFFF",
+          "image": "./assets/images/gradelenslogo.png",
+          "imageWidth": 220,
+          "resizeMode": "contain",
+
+          "dark": {
+            "backgroundColor": "#FFFFFF",
+            "image": "./assets/images/gradelenslogo.png"
+          }
         }
       ],
+
       [
         "expo-camera",
         {
-          "cameraPermission": "Allow Gradelens to use the camera to scan answer sheets.",
+          "cameraPermission": "Allow GradeLens to use the camera to scan answer sheets.",
           "recordAudioAndroid": false
         }
       ],
+
       "expo-secure-store",
       "expo-sqlite",
       "expo-image",
       "expo-web-browser"
     ],
+
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
     },
+
     "extra": {
       "router": {},
+
       "eas": {
         "projectId": "58702853-87ea-4a4d-80d5-bed59e6ba23b"
       }

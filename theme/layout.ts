@@ -12,24 +12,39 @@ export const layout = {
 
   contentMaxWidth: 720,
 
+  controls: {
+    buttonHeight: 52,
+    inputHeight: 52,
+    minimumTouchTarget: 48,
+  },
+
+  icon: {
+    xs: 16,
+    sm: 20,
+    md: 24,
+    lg: 28,
+    xl: 32,
+    status: 48,
+  },
+
   tabBar: {
     height: 76,
     heightCompact: 70,
 
-    iconSize: 21,
-    iconSizeCompact: 19,
+    iconSize: 24,
+    iconSizeCompact: 20,
 
-    scanButtonSize: 55,
-    scanButtonSizeCompact: 46,
+    scanButtonSize: 56,
+    scanButtonSizeCompact: 48,
 
-    scanIconSize: 26,
-    scanIconSizeCompact: 22,
+    scanIconSize: 28,
+    scanIconSizeCompact: 24,
 
-    labelSize: 10,
+    labelSize: 11,
     labelSizeCompact: 10,
 
     scanButtonOffset: -22,
-    scanButtonOffsetCompact: -8,
+    scanButtonOffsetCompact: -10,
   },
 } as const;
 

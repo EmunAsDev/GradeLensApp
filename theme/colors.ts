@@ -2,9 +2,10 @@ export const colors = {
   /*
    * Brand
    */
-  primary: "#800000",
-  primaryPressed: "#680000",
-  primarySoft: "#F8ECEC",
+  primary: "#AF2532",
+  primaryPressed: "#92202A",
+  primarySoft: "#FBEAEC",
+  primaryBorder: "#EFC5CA",
 
   /*
    * Surfaces
@@ -41,6 +42,11 @@ export const colors = {
 
   info: "#2563EB",
   infoSoft: "#EFF6FF",
+
+  /*
+   * Scanner
+   */
+  scannerGuide: "#F4C542",
 
   /*
    * Utility

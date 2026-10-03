@@ -1,18 +1,17 @@
 import { randomUUID } from "react-native-quick-crypto";
 
+import {
+  buildBatchSyncRequestPayload,
+  uploadOmrBatch,
+  type BatchSyncResponse,
+} from "@/api/batchSyncApi";
 import { ApiError } from "@/api/client";
 
 import {
-  uploadOmrBatch,
-  type BatchSyncAnswers,
-  type BatchSyncAnswerStatuses,
-  type BatchSyncRequestPayload,
-  type BatchSyncResponse,
-} from "@/api/batchSyncApi";
-
-import {
   assignOmrBatchUuid,
-  getOutstandingOmrSubmissionsForScanBatch,
+  getOmrSubmissionsForScanBatch,
+  getReadyOmrSubmissionsForScanBatch,
+  getRetryableOmrSubmissionsForBatch,
   markOmrBatchDeferred,
   markOmrBatchFailed,
   markOmrSubmissionFailed,
@@ -22,15 +21,15 @@ import {
 } from "@/database/omrSubmissionRepository";
 
 import {
-  getScanBatches,
+  getScanBatchByUuid,
   markScanBatchStatus,
   refreshScanBatchStatus,
 } from "@/database/scanBatchRepository";
 
-export type ScanBatchSyncResult = {
-  serverBatchCount: number;
+export type SyncScanBatchResult = {
   submissionCount: number;
   syncedCount: number;
+  reviewCount: number;
   failedCount: number;
   rejectedCount: number;
 
@@ -38,472 +37,333 @@ export type ScanBatchSyncResult = {
   retryAfterSeconds: number | null;
 };
 
-export type PendingOmrSyncResult = ScanBatchSyncResult & {
-  localBatchCount: number;
+type GroupResult = SyncScanBatchResult;
+
+const EMPTY_RESULT: SyncScanBatchResult = {
+  submissionCount: 0,
+  syncedCount: 0,
+  reviewCount: 0,
+  failedCount: 0,
+  rejectedCount: 0,
+  rateLimited: false,
+  retryAfterSeconds: null,
 };
-
-const MAX_BATCH_SIZE = 100;
-
-function normalizeFinalScore(
-  value: string | number | null | undefined,
-): number | null {
-  if (value === null || value === undefined || value === "") {
-    return null;
-  }
-
-  const parsed = Number(value);
-
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function buildServerAnswers(
-  submission: ParsedLocalOmrSubmission,
-): BatchSyncAnswers {
-  const answers: BatchSyncAnswers = {};
-
-  for (const question of submission.questions) {
-    answers[String(question.question_number)] = [...question.shaded_choices]
-      .map((choice) => choice.trim().toUpperCase())
-      .filter(
-        (choice, index, values) =>
-          ["A", "B", "C", "D", "E"].includes(choice) &&
-          values.indexOf(choice) === index,
-      )
-      .sort();
-  }
-
-  return answers;
-}
-
-function buildAnswerStatuses(
-  submission: ParsedLocalOmrSubmission,
-): BatchSyncAnswerStatuses {
-  const statuses: BatchSyncAnswerStatuses = {};
-
-  for (const question of submission.questions) {
-    statuses[String(question.question_number)] = question.status;
-  }
-
-  return statuses;
-}
-
-function toServerSubmission(submission: ParsedLocalOmrSubmission) {
-  return {
-    submission_uuid: submission.submission_uuid,
-    sheet_uuid: submission.sheet_uuid,
-    student_id_no: submission.student_id_no,
-    answers: buildServerAnswers(submission),
-    answer_statuses: buildAnswerStatuses(submission),
-    tentative_score: submission.tentative_score,
-    requires_review: submission.requires_review,
-    captured_at: submission.captured_at,
-  };
-}
-
-function getOfficialResultForSubmission(
-  response: BatchSyncResponse,
-  submission: ParsedLocalOmrSubmission,
-) {
-  return response.course_test_results?.find(
-    (result) =>
-      result.crs_tst_id === submission.crs_tst_id &&
-      (result.std_id === submission.std_id ||
-        result.student_id_no === submission.student_id_no),
-  );
-}
-
-function isAlreadyFinalizedFailure(message: string | null): boolean {
-  return (
-    message?.trim() ===
-    "This student already has a final result for this Course Test."
-  );
-}
-
-async function applyBatchResponse(
-  response: BatchSyncResponse,
-  localSubmissions: ParsedLocalOmrSubmission[],
-): Promise<{
-  syncedCount: number;
-  failedCount: number;
-  rejectedCount: number;
-}> {
-  let syncedCount = 0;
-  let failedCount = 0;
-  let rejectedCount = 0;
-
-  for (const localSubmission of localSubmissions) {
-    const serverSubmission = response.submissions.find(
-      (submission) =>
-        submission.submission_uuid === localSubmission.submission_uuid,
-    );
-
-    if (!serverSubmission) {
-      await markOmrSubmissionFailed(
-        localSubmission.submission_uuid,
-        "Laravel did not return a result for this submission.",
-      );
-
-      failedCount++;
-      continue;
-    }
-
-    if (serverSubmission.status === "failed") {
-      const errorMessage =
-        serverSubmission.error_message ??
-        "Laravel failed to process this submission.";
-
-      if (isAlreadyFinalizedFailure(serverSubmission.error_message)) {
-        await markOmrSubmissionRejected(
-          localSubmission.submission_uuid,
-          errorMessage,
-          serverSubmission.status,
-        );
-
-        rejectedCount++;
-        continue;
-      }
-
-      await markOmrSubmissionFailed(
-        localSubmission.submission_uuid,
-        errorMessage,
-        serverSubmission.status,
-      );
-
-      failedCount++;
-      continue;
-    }
-
-    const officialResult = getOfficialResultForSubmission(
-      response,
-      localSubmission,
-    );
-
-    const finalScore = normalizeFinalScore(
-      officialResult?.final_score ?? serverSubmission.final_score,
-    );
-
-    await markOmrSubmissionSynced(localSubmission.submission_uuid, {
-      serverStatus: serverSubmission.status,
-      finalScore,
-      serverRequiresReview: serverSubmission.requires_review,
-      isFlagged: serverSubmission.is_flagged,
-    });
-
-    syncedCount++;
-  }
-
-  return {
-    syncedCount,
-    failedCount,
-    rejectedCount,
-  };
-}
 
 /*
- * One faculty-facing Scan Batch may contain more than 100 papers.
+ * Synchronize one faculty-facing local scan batch.
  *
- * Laravel still receives server batches capped at 100. Existing batch_uuid
- * groups are retried first; only never-assigned rows receive a new batch_uuid.
+ * Important distinction:
+ *
+ * - scan_batch_uuid groups papers from one local scanning session.
+ * - batch_uuid identifies one immutable Laravel synchronization batch.
+ *
+ * A local scan batch may therefore create multiple Laravel batches over time.
+ * Needs Review papers remain local and are not assigned a batch_uuid until the
+ * faculty resolves every uncertain question.
  */
-async function prepareNextServerBatch(
-  scanBatchUuid: string,
-  skipBatchUuids: Set<string>,
-): Promise<{
-  batchUuid: string;
-  submissions: ParsedLocalOmrSubmission[];
-} | null> {
-  const outstanding =
-    await getOutstandingOmrSubmissionsForScanBatch(scanBatchUuid);
-
-  if (outstanding.length === 0) {
-    return null;
-  }
-
-  const alreadyAssigned = outstanding.find(
-    (submission) =>
-      submission.batch_uuid !== null &&
-      !skipBatchUuids.has(submission.batch_uuid),
-  );
-
-  if (alreadyAssigned?.batch_uuid) {
-    return {
-      batchUuid: alreadyAssigned.batch_uuid,
-      submissions: outstanding
-        .filter(
-          (submission) => submission.batch_uuid === alreadyAssigned.batch_uuid,
-        )
-        .slice(0, MAX_BATCH_SIZE),
-    };
-  }
-
-  const unassigned = outstanding
-    .filter((submission) => submission.batch_uuid === null)
-    .slice(0, MAX_BATCH_SIZE);
-
-  if (unassigned.length === 0) {
-    return null;
-  }
-
-  const batchUuid = randomUUID();
-
-  await assignOmrBatchUuid(
-    unassigned.map((submission) => submission.submission_uuid),
-    batchUuid,
-  );
-
-  return {
-    batchUuid,
-    submissions: unassigned.map((submission) => ({
-      ...submission,
-      batch_uuid: batchUuid,
-      sync_status: "syncing",
-    })),
-  };
-}
-
-async function syncOneServerBatch(
-  token: string,
-  scanBatchUuid: string,
-  skipBatchUuids: Set<string>,
-): Promise<{
-  didWork: boolean;
-  stopSyncing: boolean;
-  submissionCount: number;
-  syncedCount: number;
-  failedCount: number;
-  rejectedCount: number;
-  rateLimited: boolean;
-  retryAfterSeconds: number | null;
-}> {
-  const prepared = await prepareNextServerBatch(scanBatchUuid, skipBatchUuids);
-
-  if (!prepared) {
-    return {
-      didWork: false,
-      stopSyncing: false,
-      submissionCount: 0,
-      syncedCount: 0,
-      failedCount: 0,
-      rejectedCount: 0,
-      rateLimited: false,
-      retryAfterSeconds: null,
-    };
-  }
-
-  const first = prepared.submissions[0];
-
-  if (!first) {
-    return {
-      didWork: false,
-      stopSyncing: false,
-      submissionCount: 0,
-      syncedCount: 0,
-      failedCount: 0,
-      rejectedCount: 0,
-      rateLimited: false,
-      retryAfterSeconds: null,
-    };
-  }
-
-  const mismatched = prepared.submissions.some(
-    (submission) =>
-      submission.crs_tst_id !== first.crs_tst_id ||
-      submission.tst_id !== first.tst_id,
-  );
-
-  if (mismatched) {
-    throw new Error(
-      "A local Scan Batch cannot contain submissions from different Course Tests.",
-    );
-  }
-
-  const payload: BatchSyncRequestPayload = {
-    batch_uuid: prepared.batchUuid,
-    crs_tst_id: first.crs_tst_id,
-    tst_id: first.tst_id,
-    source: "mobile",
-    submissions: prepared.submissions.map(toServerSubmission),
-  };
-
-  try {
-    const response = await uploadOmrBatch(token, payload);
-
-    const applied = await applyBatchResponse(response, prepared.submissions);
-
-    /*
-     * Do not immediately retry child-level failures in the same button press.
-     * Keep their stable batch_uuid for the teacher's next Retry action while
-     * allowing any never-assigned submissions in this local Scan Batch to
-     * continue into the next server chunk.
-     */
-    if (applied.failedCount > 0) {
-      skipBatchUuids.add(prepared.batchUuid);
-    }
-
-    return {
-      didWork: true,
-      stopSyncing: false,
-      submissionCount: prepared.submissions.length,
-      syncedCount: applied.syncedCount,
-      failedCount: applied.failedCount,
-      rejectedCount: applied.rejectedCount,
-      rateLimited: false,
-      retryAfterSeconds: null,
-    };
-  } catch (error) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : "Unknown OMR synchronization error.";
-
-    if (error instanceof ApiError && error.status === 429) {
-      const retryAfterSeconds = error.retryAfterSeconds;
-
-      const deferredMessage =
-        retryAfterSeconds !== null
-          ? `Server rate limit reached. Retry after about ${retryAfterSeconds} second(s).`
-          : "Server rate limit reached. Please wait before syncing again.";
-
-      await markOmrBatchDeferred(prepared.batchUuid, deferredMessage);
-
-      return {
-        didWork: true,
-        stopSyncing: true,
-        submissionCount: prepared.submissions.length,
-        syncedCount: 0,
-        failedCount: 0,
-        rejectedCount: 0,
-        rateLimited: true,
-        retryAfterSeconds,
-      };
-    }
-
-    await markOmrBatchFailed(prepared.batchUuid, message);
-
-    skipBatchUuids.add(prepared.batchUuid);
-
-    return {
-      didWork: true,
-      stopSyncing: true,
-      submissionCount: prepared.submissions.length,
-      syncedCount: 0,
-      failedCount: prepared.submissions.length,
-      rejectedCount: 0,
-      rateLimited: false,
-      retryAfterSeconds: null,
-    };
-  }
-}
-
 export async function syncScanBatch(
   token: string,
   scanBatchUuid: string,
-): Promise<ScanBatchSyncResult> {
-  const normalizedUuid = scanBatchUuid.trim();
+): Promise<SyncScanBatchResult> {
+  const normalizedScanBatchUuid = scanBatchUuid.trim();
 
-  if (!normalizedUuid) {
-    throw new Error("A Scan Batch UUID is required.");
+  if (!token.trim()) {
+    throw new Error("An authenticated session is required for Batch Sync.");
   }
 
-  const result: ScanBatchSyncResult = {
-    serverBatchCount: 0,
-    submissionCount: 0,
-    syncedCount: 0,
-    failedCount: 0,
-    rejectedCount: 0,
-    rateLimited: false,
-    retryAfterSeconds: null,
-  };
+  if (!normalizedScanBatchUuid) {
+    throw new Error("A local scan batch UUID is required.");
+  }
 
-  await markScanBatchStatus(normalizedUuid, "submitting");
+  const scanBatch = await getScanBatchByUuid(normalizedScanBatchUuid);
 
-  const skipBatchUuids = new Set<string>();
+  if (!scanBatch) {
+    throw new Error("This local scan batch could not be found.");
+  }
 
-  try {
-    while (true) {
-      const batch = await syncOneServerBatch(
-        token,
-        normalizedUuid,
-        skipBatchUuids,
-      );
+  const aggregate: SyncScanBatchResult = { ...EMPTY_RESULT };
 
-      if (!batch.didWork) {
-        break;
-      }
+  const allSubmissions = await getOmrSubmissionsForScanBatch(
+    normalizedScanBatchUuid,
+  );
 
-      result.serverBatchCount++;
-      result.submissionCount += batch.submissionCount;
-      result.syncedCount += batch.syncedCount;
-      result.failedCount += batch.failedCount;
-      result.rejectedCount += batch.rejectedCount;
+  /*
+   * First retry any server batches that already exist. Their batch_uuid and
+   * membership are immutable, so they must be replayed before starting another
+   * new server batch from currently Ready local papers.
+   */
+  const existingBatchUuids = [
+    ...new Set(
+      allSubmissions
+        .filter(
+          (submission) =>
+            submission.batch_uuid !== null &&
+            submission.sync_status !== "synced" &&
+            submission.sync_status !== "rejected",
+        )
+        .map((submission) => submission.batch_uuid as string),
+    ),
+  ];
 
-      if (batch.rateLimited) {
-        result.rateLimited = true;
-        result.retryAfterSeconds = batch.retryAfterSeconds;
-      }
+  if (existingBatchUuids.length > 0) {
+    await markScanBatchStatus(normalizedScanBatchUuid, "submitting");
+  }
 
-      if (batch.stopSyncing) {
-        break;
-      }
+  for (const batchUuid of existingBatchUuids) {
+    const retryable = await getRetryableOmrSubmissionsForBatch(batchUuid);
+
+    if (retryable.length === 0) {
+      continue;
     }
 
+    const result = await synchronizeServerBatch(
+      token,
+      batchUuid,
+      scanBatch.crs_tst_id,
+      scanBatch.tst_id,
+      retryable,
+    );
+
+    mergeResult(aggregate, result);
+
+    if (result.rateLimited) {
+      await refreshScanBatchStatus(normalizedScanBatchUuid);
+      return aggregate;
+    }
+  }
+
+  /*
+   * Only unresolved-free, unbatched papers are allowed into a new Laravel
+   * batch. Needs Review papers are intentionally absent from this query.
+   */
+  const ready = await getReadyOmrSubmissionsForScanBatch(
+    normalizedScanBatchUuid,
+  );
+
+  if (ready.length > 0) {
+    await markScanBatchStatus(normalizedScanBatchUuid, "submitting");
+
+    const batchUuid = randomUUID();
+
+    await assignOmrBatchUuid(
+      ready.map((submission) => submission.submission_uuid),
+      batchUuid,
+    );
+
+    /*
+     * Reload the now-frozen rows before network I/O. From this point onward the
+     * request is built from the exact stored evidence tied to batchUuid.
+     */
+    const frozen = await getRetryableOmrSubmissionsForBatch(batchUuid);
+
+    const result = await synchronizeServerBatch(
+      token,
+      batchUuid,
+      scanBatch.crs_tst_id,
+      scanBatch.tst_id,
+      frozen,
+    );
+
+    mergeResult(aggregate, result);
+  }
+
+  await refreshScanBatchStatus(normalizedScanBatchUuid);
+
+  return aggregate;
+}
+
+async function synchronizeServerBatch(
+  token: string,
+  batchUuid: string,
+  crsTstId: number,
+  tstId: number,
+  submissions: ParsedLocalOmrSubmission[],
+): Promise<GroupResult> {
+  if (submissions.length === 0) {
+    return { ...EMPTY_RESULT };
+  }
+
+  const result: GroupResult = {
+    ...EMPTY_RESULT,
+    submissionCount: submissions.length,
+  };
+
+  try {
+    const payload = buildBatchSyncRequestPayload(
+      batchUuid,
+      crsTstId,
+      tstId,
+      submissions,
+    );
+
+    const response = await uploadOmrBatch(token, payload);
+
+    await applyServerResponse(submissions, response, result);
+
     return result;
-  } finally {
-    await refreshScanBatchStatus(normalizedUuid);
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 429) {
+      const message =
+        error.message || "GradeLens temporarily paused Batch Sync.";
+
+      await markOmrBatchDeferred(batchUuid, message);
+
+      result.rateLimited = true;
+      result.retryAfterSeconds = error.retryAfterSeconds;
+
+      return result;
+    }
+
+    if (
+      error instanceof ApiError &&
+      (error.status === 409 || error.status === 422)
+    ) {
+      const message =
+        error.message ||
+        "Laravel rejected this immutable synchronization batch.";
+
+      for (const submission of submissions) {
+        await markOmrSubmissionRejected(
+          submission.submission_uuid,
+          message,
+          `http_${error.status}`,
+        );
+
+        result.rejectedCount++;
+      }
+
+      return result;
+    }
+
+    const message =
+      error instanceof Error
+        ? error.message
+        : "GradeLens could not complete this synchronization batch.";
+
+    await markOmrBatchFailed(batchUuid, message);
+
+    result.failedCount = submissions.length;
+
+    throw error;
   }
 }
 
-/*
- * Compatibility helper. The Batch screen should use syncScanBatch() so the
- * teacher explicitly chooses which local batch to submit.
- */
-export async function syncPendingOmrSubmissions(
-  token: string,
-): Promise<PendingOmrSyncResult> {
-  const result: PendingOmrSyncResult = {
-    localBatchCount: 0,
-    serverBatchCount: 0,
-    submissionCount: 0,
-    syncedCount: 0,
-    failedCount: 0,
-    rejectedCount: 0,
-    rateLimited: false,
-    retryAfterSeconds: null,
-  };
+async function applyServerResponse(
+  submitted: ParsedLocalOmrSubmission[],
+  response: BatchSyncResponse,
+  result: GroupResult,
+): Promise<void> {
+  const responseByUuid = new Map(
+    response.submissions.map((submission) => [
+      submission.submission_uuid,
+      submission,
+    ]),
+  );
 
-  const batches = await getScanBatches();
+  for (const local of submitted) {
+    const server = responseByUuid.get(local.submission_uuid);
 
-  for (const batch of batches) {
-    if (
-      batch.status === "submitted" ||
-      batch.status === "completed_with_issues"
-    ) {
+    if (!server) {
+      await markOmrSubmissionFailed(
+        local.submission_uuid,
+        "Laravel did not return a result for this submission.",
+        null,
+      );
+
+      result.failedCount++;
       continue;
     }
 
-    const outstanding = await getOutstandingOmrSubmissionsForScanBatch(
-      batch.scan_batch_uuid,
+    if (server.status === "processed") {
+      await markOmrSubmissionSynced(local.submission_uuid, {
+        serverStatus: server.status,
+        finalScore: normalizeNullableNumber(server.final_score),
+        serverRequiresReview: false,
+        isFlagged: Boolean(server.is_flagged),
+      });
+
+      result.syncedCount++;
+      continue;
+    }
+
+    /*
+     * This should not occur in the normal mobile-first workflow because local
+     * review blocks synchronization. Keep support as a defensive compatibility
+     * path for older app versions or unexpected server-side review rules.
+     */
+    if (server.status === "review_required") {
+      await markOmrSubmissionSynced(local.submission_uuid, {
+        serverStatus: server.status,
+        finalScore: null,
+        serverRequiresReview: true,
+        isFlagged: true,
+      });
+
+      result.reviewCount++;
+      continue;
+    }
+
+    if (server.status === "failed") {
+      const message =
+        server.error_message || "Laravel could not process this submission.";
+
+      if (isFinalizedResultConflict(message)) {
+        await markOmrSubmissionRejected(
+          local.submission_uuid,
+          message,
+          server.status,
+        );
+
+        result.rejectedCount++;
+      } else {
+        await markOmrSubmissionFailed(
+          local.submission_uuid,
+          message,
+          server.status,
+        );
+
+        result.failedCount++;
+      }
+
+      continue;
+    }
+
+    await markOmrSubmissionFailed(
+      local.submission_uuid,
+      `Unsupported Laravel submission status: ${server.status}.`,
+      server.status,
     );
 
-    if (outstanding.length === 0) {
-      continue;
-    }
+    result.failedCount++;
+  }
+}
 
-    const batchResult = await syncScanBatch(token, batch.scan_batch_uuid);
+function isFinalizedResultConflict(message: string): boolean {
+  return message.toLowerCase().includes("already has a final result");
+}
 
-    result.localBatchCount++;
-    result.serverBatchCount += batchResult.serverBatchCount;
-    result.submissionCount += batchResult.submissionCount;
-    result.syncedCount += batchResult.syncedCount;
-    result.failedCount += batchResult.failedCount;
-    result.rejectedCount += batchResult.rejectedCount;
-
-    if (batchResult.rateLimited) {
-      result.rateLimited = true;
-      result.retryAfterSeconds = batchResult.retryAfterSeconds;
-      break;
-    }
+function normalizeNullableNumber(value: string | number | null): number | null {
+  if (value === null || value === "") {
+    return null;
   }
 
-  return result;
+  const numeric = Number(value);
+
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function mergeResult(
+  target: SyncScanBatchResult,
+  source: SyncScanBatchResult,
+): void {
+  target.submissionCount += source.submissionCount;
+  target.syncedCount += source.syncedCount;
+  target.reviewCount += source.reviewCount;
+  target.failedCount += source.failedCount;
+  target.rejectedCount += source.rejectedCount;
+
+  if (source.rateLimited) {
+    target.rateLimited = true;
+    target.retryAfterSeconds = source.retryAfterSeconds;
+  }
 }

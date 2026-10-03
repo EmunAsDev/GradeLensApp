@@ -13,7 +13,7 @@ export type TentativeQuestionScore = {
   question_number: number;
   student_answers: string[];
   correct_answers: string[];
-  status: "correct" | "incorrect" | "unanswered" | "missing_key";
+  status: "correct" | "incorrect" | "invalid" | "unanswered" | "missing_key";
   needs_review: boolean;
 };
 
@@ -26,6 +26,7 @@ export type TentativeScoreResult = {
   unanswered: number;
   correct: number;
   incorrect: number;
+  invalid: number;
   missing_key: number;
   review_question_numbers: number[];
   missing_key_question_numbers: number[];
@@ -72,14 +73,17 @@ function buildReviewSet(reviewQuestionNumbers: number[]): Set<number> {
 /*
  * Tentative scoring rules:
  *
- * - No shaded choices -> unanswered.
+ * - `submission.answers` is the CURRENT effective answer set.
+ * - Original native evidence remains frozen in `submission.questions`.
+ * - Faculty pre-sync clarification may change `submission.answers` only.
+ * - No selected choices -> unanswered.
  * - Exact single-answer match -> correct.
  * - Exact multiple-answer match -> correct.
  * - Order of multiple answers does not matter.
  * - Missing or extra choices -> incorrect.
- * - Crossed/invalid choices are not treated as selected answers because
- *   scoring uses the interpreter's shaded_choices field.
- * - A review flag does not automatically make an answer incorrect.
+ * - status="invalid" is an understood machine rule violation: automatic 0.
+ * - A question still present in review_question_numbers is unresolved and
+ *   therefore blocks synchronization.
  * - Missing answer key -> missing_key and is not scored.
  *
  * The same rules are used for both 50- and 100-item papers.
@@ -145,6 +149,7 @@ export function scoreOmrSubmission(
   let incorrect = 0;
   let answered = 0;
   let unanswered = 0;
+  let invalid = 0;
   let missingKey = 0;
   let keyedQuestions = 0;
 
@@ -158,7 +163,7 @@ export function scoreOmrSubmission(
   ) {
     const correctAnswers = normalizeChoices(answerKey[questionNumber] ?? []);
 
-    const submissionQuestion = submissionQuestionMap.get(questionNumber);
+    const machineQuestion = submissionQuestionMap.get(questionNumber);
 
     if (correctAnswers.length === 0) {
       missingKey++;
@@ -178,30 +183,40 @@ export function scoreOmrSubmission(
     keyedQuestions++;
 
     /*
-     * IMPORTANT:
-     * Use shaded_choices rather than the single "answer" field.
-     *
-     * This is what allows:
-     *
-     *   key ["A"]       + student ["A"]       -> correct
-     *   key ["A","C"]   + student ["C","A"]   -> correct
-     *   key ["A","C"]   + student ["A"]      -> incorrect
-     *   key ["A","C"]   + student ["A","C","D"] -> incorrect
-     *
-     * Therefore multiple-answer questions work naturally for both
-     * 50-item and 100-item sheets.
+     * INVALID is deterministic zero and is never a faculty-review item.
+     * Faculty clarification is intentionally limited to genuine uncertainty
+     * (ambiguous/unreadable), so an invalid machine result cannot be manually
+     * rescued through the pre-sync review workflow.
      */
-    const studentAnswers = submissionQuestion?.shaded_choices ?? [];
+    if (machineQuestion?.status === "invalid") {
+      answered++;
+      incorrect++;
+      invalid++;
 
-    const normalizedStudentAnswers = normalizeChoices(studentAnswers);
+      questions.push({
+        question_number: questionNumber,
+        student_answers: [],
+        correct_answers: correctAnswers,
+        status: "invalid",
+        needs_review: false,
+      });
 
-    const needsReview =
-      reviewSet.has(questionNumber) ||
-      submissionQuestion?.needs_review === true ||
-      submissionQuestion?.quality_status === "review" ||
-      submissionQuestion?.quality_status === "reject";
+      continue;
+    }
 
-    if (normalizedStudentAnswers.length === 0) {
+    /*
+     * Use the effective answer map rather than the frozen machine question.
+     * This is what allows a faculty-resolved ambiguous/unreadable question to
+     * be scored locally before sync while preserving the original machine
+     * evidence separately.
+     */
+    const studentAnswers = normalizeChoices(
+      submission.answers[String(questionNumber)] ?? [],
+    );
+
+    const needsReview = reviewSet.has(questionNumber);
+
+    if (studentAnswers.length === 0) {
       unanswered++;
 
       questions.push({
@@ -217,12 +232,12 @@ export function scoreOmrSubmission(
 
     answered++;
 
-    if (arraysEqual(normalizedStudentAnswers, correctAnswers)) {
+    if (arraysEqual(studentAnswers, correctAnswers)) {
       correct++;
 
       questions.push({
         question_number: questionNumber,
-        student_answers: normalizedStudentAnswers,
+        student_answers: studentAnswers,
         correct_answers: correctAnswers,
         status: "correct",
         needs_review: needsReview,
@@ -232,7 +247,7 @@ export function scoreOmrSubmission(
 
       questions.push({
         question_number: questionNumber,
-        student_answers: normalizedStudentAnswers,
+        student_answers: studentAnswers,
         correct_answers: correctAnswers,
         status: "incorrect",
         needs_review: needsReview,
@@ -249,6 +264,7 @@ export function scoreOmrSubmission(
     unanswered,
     correct,
     incorrect,
+    invalid,
     missing_key: missingKey,
     review_question_numbers: [...reviewSet].sort((a, b) => a - b),
     missing_key_question_numbers: missingKeyQuestionNumbers.sort(

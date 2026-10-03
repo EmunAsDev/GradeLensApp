@@ -69,6 +69,17 @@ class CrossAnalyzer {
         const val DEFINITE_CROSS_THRESHOLD =
             0.080
 
+        /*
+         * Checkpoint 4 quick precheck. This is NOT a final cross decision.
+         * It uses the same cached diagonal geometry but raw grayscale darkness,
+         * center offset only, and no CLAHE/blur. Its only job is high-recall
+         * routing: decide whether the full CrossAnalyzer should be considered.
+         * The threshold is intentionally permissive while we validate it on
+         * real crossed/filled/blank control sheets.
+         */
+        const val QUICK_PRECHECK_POSSIBLE_THRESHOLD =
+            0.020
+
         private val MAIN_ANGLES =
             doubleArrayOf(
                 30.0,
@@ -168,6 +179,19 @@ class CrossAnalyzer {
         val predictedCross: Boolean,
 
         val needsReview: Boolean,
+    )
+
+    data class QuickPrecheckResult(
+        val mainArmScore: Double,
+        val antiArmScore: Double,
+        val strongerArmScore: Double,
+        val weakerArmScore: Double,
+        val crossScore: Double,
+        val diagonalBalance: Double,
+        val backgroundDarkness: Double,
+        val bestMainAngle: Double,
+        val bestAntiAngle: Double,
+        val plausibleCross: Boolean,
     )
 
     private data class CandidateResult(
@@ -295,6 +319,176 @@ class CrossAnalyzer {
             antiAngleSearchNs = timingAntiAngleSearchNs,
             candidateSelectionNs = timingCandidateSelectionNs,
         )
+
+    /*
+    |--------------------------------------------------------------------------
+    | Quick Cross Precheck — Checkpoint 4
+    |--------------------------------------------------------------------------
+    |
+    | High-recall ROUTING only. It deliberately avoids CLAHE, blur, 9 center
+    | offsets, and final cross thresholds. Full analyze() remains authoritative.
+    |
+    | This precheck uses the already-cached diagonal masks at the zero center
+    | offset, so it is much cheaper than the full geometric search and does not
+    | introduce a second independent cross algorithm.
+    |--------------------------------------------------------------------------
+    */
+
+    fun quickPrecheck(
+        normalizedImage: Mat,
+        centerX: Double,
+        centerY: Double,
+    ): QuickPrecheckResult {
+
+        if (normalizedImage.empty()) {
+            throw IllegalArgumentException(
+                "Normalized image is empty."
+            )
+        }
+
+        val pxPerMmX =
+            NORMALIZED_WIDTH.toDouble() /
+                SHEET_WIDTH_MM
+
+        val pxPerMmY =
+            NORMALIZED_HEIGHT.toDouble() /
+                SHEET_HEIGHT_MM
+
+        val pxPerMm =
+            (pxPerMmX + pxPerMmY) /
+                2.0
+
+        val contextSize =
+            (CONTEXT_SIZE_MM * pxPerMm)
+                .toInt()
+                .coerceAtLeast(3)
+                .let { value ->
+                    if (value % 2 == 0) value + 1 else value
+                }
+
+        val crop =
+            getContextCrop(
+                normalizedImage,
+                centerX,
+                centerY,
+                contextSize,
+            )
+
+        val gray = Mat()
+        val rawDarkness = Mat()
+
+        try {
+            if (crop.channels() == 1) {
+                crop.copyTo(gray)
+            } else {
+                Imgproc.cvtColor(
+                    crop,
+                    gray,
+                    Imgproc.COLOR_BGR2GRAY,
+                )
+            }
+
+            gray.convertTo(
+                rawDarkness,
+                org.opencv.core.CvType.CV_64F,
+                -1.0 / 255.0,
+                1.0,
+            )
+
+            val rows = rawDarkness.rows()
+            val cols = rawDarkness.cols()
+
+            val geometry =
+                getOrCreateGeometry(
+                    rows = rows,
+                    cols = cols,
+                    pxPerMm = pxPerMm,
+                )
+
+            val darknessValues =
+                DoubleArray(rows * cols)
+
+            val copiedValues =
+                rawDarkness.get(
+                    0,
+                    0,
+                    darknessValues,
+                )
+
+            val expectedBytes =
+                darknessValues.size *
+                    java.lang.Double.BYTES
+
+            if (copiedValues != expectedBytes) {
+                throw IllegalStateException(
+                    "Could not read complete quick-cross darkness buffer."
+                )
+            }
+
+            val backgroundDarkness =
+                if (geometry.backgroundIndices.isNotEmpty()) {
+                    geometry.backgroundIndices
+                        .sumOf { index ->
+                            darknessValues[index]
+                        } /
+                        geometry.backgroundIndices.size.toDouble()
+                } else {
+                    0.0
+                }
+
+            val zeroOffset =
+                geometry.offsets.minByOrNull { offset ->
+                    abs(offset.offsetMmX) +
+                        abs(offset.offsetMmY)
+                } ?: throw IllegalStateException(
+                    "Cross geometry cache has no center offset."
+                )
+
+            val mainResult =
+                bestAngleScore(
+                    darknessValues = darknessValues,
+                    masks = zeroOffset.mainMasks,
+                    backgroundDarkness = backgroundDarkness,
+                )
+
+            val antiResult =
+                bestAngleScore(
+                    darknessValues = darknessValues,
+                    masks = zeroOffset.antiMasks,
+                    backgroundDarkness = backgroundDarkness,
+                )
+
+            val stronger =
+                max(mainResult.second, antiResult.second)
+
+            val weaker =
+                min(mainResult.second, antiResult.second)
+
+            val balance =
+                weaker /
+                    max(stronger, 1e-6)
+
+            return QuickPrecheckResult(
+                mainArmScore = mainResult.second,
+                antiArmScore = antiResult.second,
+                strongerArmScore = stronger,
+                weakerArmScore = weaker,
+                crossScore = weaker,
+                diagonalBalance = balance,
+                backgroundDarkness = backgroundDarkness,
+                bestMainAngle = mainResult.first,
+                bestAntiAngle = antiResult.first,
+                plausibleCross =
+                    weaker >=
+                        QUICK_PRECHECK_POSSIBLE_THRESHOLD,
+            )
+
+        } finally {
+            rawDarkness.release()
+            gray.release()
+            crop.release()
+        }
+    }
 
     /*
     |--------------------------------------------------------------------------

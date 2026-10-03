@@ -127,6 +127,7 @@ export default function BatchDetailsScreen() {
     let synced = 0;
     let syncing = 0;
     let rejected = 0;
+    let retryPending = 0;
 
     for (const submission of submissions) {
       if (submission.sync_status === "synced") {
@@ -146,14 +147,24 @@ export default function BatchDetailsScreen() {
 
       if (submission.sync_status === "syncing") {
         syncing++;
+        continue;
       }
 
-      if (submission.requires_review) {
+      if (submission.requires_review && submission.batch_uuid === null) {
         review++;
-      } else {
-        ready++;
+        continue;
       }
+
+      if (submission.batch_uuid !== null) {
+        retryPending++;
+        continue;
+      }
+
+      ready++;
     }
+
+    const syncable = ready + failed + syncing + retryPending;
+    const outstanding = syncable + review;
 
     return {
       ready,
@@ -162,7 +173,9 @@ export default function BatchDetailsScreen() {
       synced,
       syncing,
       rejected,
-      outstanding: ready + review + failed,
+      retryPending,
+      syncable,
+      outstanding,
     };
   }, [submissions]);
 
@@ -200,11 +213,19 @@ export default function BatchDetailsScreen() {
       return;
     }
 
-    if (counts.outstanding <= 0) {
-      Alert.alert(
-        "Batch Submitted",
-        "Every submission in this Batch has already been synchronized.",
-      );
+    if (counts.syncable <= 0) {
+      if (counts.review > 0) {
+        Alert.alert(
+          "Review Required",
+          `${counts.review} paper${counts.review === 1 ? "" : "s"} still need faculty clarification. Review papers stay on this device and cannot be submitted until they are resolved.`,
+        );
+      } else {
+        Alert.alert(
+          "Batch Submitted",
+          "Every submission in this Batch has already been synchronized.",
+        );
+      }
+
       return;
     }
 
@@ -236,10 +257,18 @@ export default function BatchDetailsScreen() {
         return;
       }
 
+      if (result.reviewCount > 0) {
+        Alert.alert(
+          "Server Review Safeguard",
+          `${result.reviewCount} submission${result.reviewCount === 1 ? "" : "s"} reached Laravel with a server-side review condition. This is a fallback safeguard; normal mobile review papers should be resolved before synchronization.`,
+        );
+        return;
+      }
+
       if (result.rejectedCount > 0 && result.failedCount === 0) {
         Alert.alert(
           "Batch Completed with Issues",
-          `${result.syncedCount} submission(s) were accepted and ${result.rejectedCount} were not accepted because they conflict with an already finalized result. Those scans will not be retried.`,
+          `${result.syncedCount} finalized and ${result.rejectedCount} were not accepted because they conflict with an already finalized result. Rejected scans will not be retried.`,
         );
         return;
       }
@@ -247,14 +276,14 @@ export default function BatchDetailsScreen() {
       if (result.failedCount > 0 || result.rejectedCount > 0) {
         Alert.alert(
           "Batch Needs Attention",
-          `${result.syncedCount} accepted, ${result.failedCount} retryable failure(s), and ${result.rejectedCount} non-retryable issue(s). Only retryable failures will be attempted again.`,
+          `${result.syncedCount} finalized, ${result.failedCount} retryable failure(s), and ${result.rejectedCount} non-retryable issue(s). Only retryable synchronization failures will be attempted again.`,
         );
         return;
       }
 
       Alert.alert(
         "Batch Submitted",
-        `${result.syncedCount} submission(s) synchronized successfully.`,
+        `${result.syncedCount} submission(s) synchronized and finalized successfully.`,
       );
     } catch (error) {
       console.error("[BATCH DETAIL] Submission failed:", error);
@@ -268,6 +297,27 @@ export default function BatchDetailsScreen() {
     } finally {
       setIsSyncing(false);
     }
+  };
+
+  const handleReviewSubmission = (submission: ParsedLocalOmrSubmission) => {
+    if (
+      submission.batch_uuid !== null ||
+      submission.sync_status !== "pending"
+    ) {
+      Alert.alert(
+        "Review Locked",
+        "This scan can no longer be edited locally because synchronization has already started.",
+      );
+      return;
+    }
+
+    router.push({
+      pathname: "/batch/review/[submissionUuid]",
+      params: {
+        submissionUuid: submission.submission_uuid,
+        returnTo: "batch",
+      },
+    });
   };
 
   const handleRemoveSubmission = (submission: ParsedLocalOmrSubmission) => {
@@ -380,11 +430,15 @@ export default function BatchDetailsScreen() {
   }
 
   const batchStatus = getBatchStatusPresentation(batch.status);
+
   const submitLabel = getSubmitButtonLabel(
     batch,
-    counts.outstanding,
+    counts.syncable,
+    counts.review,
     isSyncing,
   );
+
+  const submitDisabled = isSyncing || counts.syncable === 0;
 
   return (
     <View style={styles.screen}>
@@ -402,37 +456,43 @@ export default function BatchDetailsScreen() {
         contentContainerStyle={[
           styles.content,
           {
-            paddingTop: insets.top + theme.spacing.md,
+            paddingTop: insets.top + theme.spacing.sm,
+
             paddingBottom: insets.bottom + theme.spacing.xxxl,
           },
         ]}
         ListHeaderComponent={
           <>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Back to Batch list"
-              onPress={() => router.back()}
-              style={({ pressed }) => [
-                styles.backButton,
-                pressed && styles.pressed,
-              ]}
-            >
-              <Text style={styles.backButtonText}>‹</Text>
-              <Text style={styles.backButtonLabel}>Batch</Text>
-            </Pressable>
+            <View style={styles.pageHeader}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Back to Batch list"
+                onPress={() => router.back()}
+                style={({ pressed }) => [
+                  styles.headerBackButton,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={styles.headerBackIcon}>‹</Text>
+              </Pressable>
+
+              <Text style={styles.pageTitle} numberOfLines={1}>
+                Batch {batch.batch_number} -{" "}
+                {shortBatchUuid(batch.scan_batch_uuid)}
+              </Text>
+            </View>
+
+            <Text style={styles.scanBatchLabel}>Scan Batch</Text>
 
             <View style={styles.headerCard}>
-              <View style={styles.headerTopRow}>
-                <View style={styles.headerTitleGroup}>
-                  <Text style={styles.eyebrow}>Scan Batch</Text>
-                  <Text style={styles.title}>Batch #{batch.batch_number}</Text>
-                  <Text style={styles.courseLine}>
-                    {batch.course_code ?? "Course"}
-                    {batch.course_test_title
-                      ? ` · ${batch.course_test_title}`
-                      : ""}
-                  </Text>
-                </View>
+              <View style={styles.batchCourseRow}>
+                <Text style={styles.courseLine} numberOfLines={2}>
+                  {batch.course_code ?? "Course"}
+                  {batch.crs_tst_id ? ` (${batch.crs_tst_id})` : ""}
+                  {batch.course_test_title
+                    ? ` | ${batch.course_test_title}`
+                    : ""}
+                </Text>
 
                 <StatusBadge
                   label={batchStatus.label}
@@ -442,27 +502,54 @@ export default function BatchDetailsScreen() {
 
               <View style={styles.summaryGrid}>
                 <SummaryItem label="Scans" value={submissions.length} />
-                <SummaryItem label="Ready" value={counts.ready} />
-                <SummaryItem label="Review" value={counts.review} />
+
+                <SummaryItem label="Ready" value={counts.ready} tone="ready" />
+
+                <SummaryItem
+                  label="Review"
+                  value={counts.review}
+                  tone="review"
+                />
+
                 <SummaryItem
                   label="Issues"
                   value={counts.failed + counts.rejected}
+                  tone="issues"
                 />
-                <SummaryItem label="Synced" value={counts.synced} />
+
+                <SummaryItem
+                  label="Synced"
+                  value={counts.synced}
+                  tone="synced"
+                />
               </View>
 
               <Pressable
-                disabled={isSyncing || counts.outstanding === 0}
+                disabled={submitDisabled}
                 onPress={() => {
                   void handleSubmitBatch();
                 }}
                 style={({ pressed }) => [
                   styles.submitButton,
-                  pressed &&
-                    !isSyncing &&
-                    counts.outstanding > 0 &&
-                    styles.pressed,
-                  (isSyncing || counts.outstanding === 0) && styles.disabled,
+
+                  batch.status === "submitted" && styles.submitButtonComplete,
+
+                  batch.status === "completed_with_issues" &&
+                    styles.submitButtonWarning,
+
+                  batch.status === "needs_attention" &&
+                    styles.submitButtonDanger,
+
+                  counts.syncable === 0 &&
+                    counts.review > 0 &&
+                    styles.submitButtonWarning,
+
+                  pressed && !submitDisabled && styles.pressed,
+
+                  submitDisabled &&
+                    batch.status !== "submitted" &&
+                    counts.review === 0 &&
+                    styles.submitButtonDisabled,
                 ]}
               >
                 {isSyncing ? (
@@ -475,17 +562,23 @@ export default function BatchDetailsScreen() {
                 <Text style={styles.submitButtonText}>{submitLabel}</Text>
               </Pressable>
 
-              <Text style={styles.submitHint}>
-                Ready and Needs Review scans can both be submitted. Once a scan
-                has been assigned to a server batch, its stored evidence is
-                locked and retries reuse that same identity.
-              </Text>
+              <View style={styles.batchHintRow}>
+                <Text style={styles.batchHintIcon}>ⓘ</Text>
+
+                <Text style={styles.submitHint}>
+                  Only Ready and retryable synchronization submissions are sent.
+                  Needs Review papers stay on this device until faculty resolves
+                  every uncertain question.
+                </Text>
+              </View>
             </View>
 
             <View style={styles.sectionHeadingRow}>
               <Text style={styles.sectionHeading}>Submissions</Text>
+
               <Text style={styles.sectionHeadingHint}>
-                {submissions.length} paper{submissions.length === 1 ? "" : "s"}
+                {submissions.length} paper
+                {submissions.length === 1 ? "" : "s"}
               </Text>
             </View>
           </>
@@ -493,6 +586,7 @@ export default function BatchDetailsScreen() {
         ListEmptyComponent={
           <View style={styles.emptyCard}>
             <Text style={styles.emptyTitle}>No Submissions</Text>
+
             <Text style={styles.emptyText}>
               There are no saved scans inside this Batch.
             </Text>
@@ -503,6 +597,7 @@ export default function BatchDetailsScreen() {
             batch={batch}
             submission={item}
             isRemoving={removingSubmissionUuid === item.submission_uuid}
+            onReview={() => handleReviewSubmission(item)}
             onRemove={() => handleRemoveSubmission(item)}
           />
         )}
@@ -516,95 +611,225 @@ function SubmissionCard({
   batch,
   submission,
   isRemoving,
+  onReview,
   onRemove,
 }: {
   batch: LocalScanBatchSummary;
   submission: ParsedLocalOmrSubmission;
   isRemoving: boolean;
+  onReview: () => void;
   onRemove: () => void;
 }) {
-  const quality = getQualityPresentation(submission);
-  const sync = getSyncPresentation(submission);
+  const presentation = getSubmissionCardPresentation(submission);
+
   const canRemove = canRemoveSubmission(batch, submission);
+
+  const canReview =
+    submission.sync_status === "pending" &&
+    submission.batch_uuid === null &&
+    (submission.requires_review ||
+      submission.local_review?.state === "resolved");
+
+  const originalReviewQuestionNumbers = submission.local_review
+    ?.original_review_question_numbers?.length
+    ? submission.local_review.original_review_question_numbers
+    : submission.review_question_numbers;
+
   const score = submission.final_score ?? submission.tentative_score;
+
   const scoreLabel =
     submission.sync_status === "synced" && submission.final_score !== null
       ? "Final Score"
       : "Tentative Score";
 
+  const showLocalStateBox =
+    submission.sync_status === "pending" && submission.batch_uuid === null;
+
   return (
-    <View style={styles.submissionCard}>
-      <View style={styles.submissionTopRow}>
-        <View style={styles.studentGroup}>
-          <Text style={styles.studentId}>{submission.student_id_no}</Text>
-          <Text style={styles.captureTime}>
+    <View
+      style={[
+        styles.submissionCard,
+
+        presentation.tone === "success" && styles.submissionCardSuccess,
+
+        presentation.tone === "warning" && styles.submissionCardWarning,
+
+        presentation.tone === "danger" && styles.submissionCardDanger,
+
+        presentation.tone === "primary" && styles.submissionCardPrimary,
+      ]}
+    >
+      <View
+        style={[
+          styles.submissionAccent,
+
+          presentation.tone === "success" &&
+            (submission.sync_status === "synced"
+              ? styles.submissionAccentComplete
+              : styles.submissionAccentReady),
+
+          presentation.tone === "warning" && styles.submissionAccentReview,
+
+          presentation.tone === "danger" && styles.submissionAccentDanger,
+
+          presentation.tone === "primary" && styles.submissionAccentPrimary,
+        ]}
+      />
+
+      <View style={styles.submissionMainRow}>
+        <View style={styles.submissionIdentity}>
+          <Text style={styles.studentId} numberOfLines={1}>
+            {submission.student_id_no}
+          </Text>
+
+          <Text style={styles.captureTime} numberOfLines={1}>
             Captured {formatTime(submission.captured_at)}
           </Text>
         </View>
 
-        <StatusBadge label={sync.label} tone={sync.tone} />
-      </View>
+        <View style={styles.scoreBlock}>
+          <Text style={styles.scoreLabel} numberOfLines={1}>
+            {scoreLabel}
+          </Text>
 
-      <View style={styles.scoreRow}>
-        <View>
-          <Text style={styles.scoreLabel}>{scoreLabel}</Text>
-          <Text style={styles.scoreValue}>
+          <Text style={styles.scoreValue} numberOfLines={1}>
             {formatScore(score)} / {submission.question_count}
           </Text>
         </View>
 
-        <StatusBadge label={quality.label} tone={quality.tone} />
+        <StatusBadge label={presentation.label} tone={presentation.tone} />
       </View>
 
-      {submission.review_question_numbers.length > 0 ? (
-        <View style={styles.reviewBox}>
-          <Text style={styles.reviewTitle}>Questions to review</Text>
-          <Text style={styles.reviewText}>
-            {formatReviewQuestions(submission.review_question_numbers)}
-          </Text>
+      {showLocalStateBox ? (
+        <View style={styles.submissionBottomRow}>
+          <View
+            style={[
+              styles.localStateBox,
+
+              submission.requires_review
+                ? styles.localStateBoxReview
+                : styles.localStateBoxReady,
+            ]}
+          >
+            <Text
+              style={[
+                styles.localStateTitle,
+
+                submission.requires_review
+                  ? styles.localStateTitleReview
+                  : styles.localStateTitleReady,
+              ]}
+            >
+              {submission.requires_review
+                ? "Questions to review"
+                : submission.local_review?.state === "resolved"
+                  ? "Review completed"
+                  : "Ready to sync"}
+            </Text>
+
+            <Text style={styles.localStateText} numberOfLines={2}>
+              {submission.requires_review
+                ? formatReviewQuestions(originalReviewQuestionNumbers)
+                : submission.local_review?.state === "resolved" &&
+                    originalReviewQuestionNumbers.length > 0
+                  ? formatReviewQuestions(originalReviewQuestionNumbers)
+                  : "No review required"}
+            </Text>
+          </View>
+
+          {canReview || canRemove ? (
+            <View style={styles.cardActionRow}>
+              {canReview ? (
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={onReview}
+                  style={({ pressed }) => [
+                    styles.reviewButton,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <Text style={styles.reviewButtonText}>
+                    {submission.requires_review
+                      ? "Review Answers"
+                      : "Edit Review"}
+                  </Text>
+                </Pressable>
+              ) : null}
+
+              {canRemove ? (
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={isRemoving}
+                  onPress={onRemove}
+                  style={({ pressed }) => [
+                    styles.removeButton,
+                    pressed && !isRemoving && styles.pressed,
+                    isRemoving && styles.disabled,
+                  ]}
+                >
+                  {isRemoving ? (
+                    <ActivityIndicator
+                      size="small"
+                      color={theme.colors.danger}
+                    />
+                  ) : null}
+
+                  <Text style={styles.removeButtonText}>
+                    {isRemoving ? "Removing..." : "Remove Scan"}
+                  </Text>
+                </Pressable>
+              ) : null}
+            </View>
+          ) : null}
         </View>
       ) : null}
 
       {submission.sync_status === "rejected" ? (
-        <Text style={styles.failureText}>
-          This scan was not accepted because this student already has a
-          finalized result for this Course Test. Finalized results cannot be
-          replaced by a normal rescan.
-        </Text>
-      ) : submission.sync_status === "failed" ? (
-        <Text style={styles.failureText}>
-          This submission could not be completed. Submit this Batch again to
-          retry only unresolved scans.
-        </Text>
-      ) : null}
-
-      {canRemove ? (
-        <Pressable
-          disabled={isRemoving}
-          onPress={onRemove}
-          style={({ pressed }) => [
-            styles.removeButton,
-            pressed && !isRemoving && styles.pressed,
-            isRemoving && styles.disabled,
-          ]}
-        >
-          {isRemoving ? (
-            <ActivityIndicator size="small" color={theme.colors.danger} />
-          ) : null}
-
-          <Text style={styles.removeButtonText}>
-            {isRemoving ? "Removing..." : "Remove Scan"}
+        <View style={styles.issueMessageBox}>
+          <Text style={styles.failureText}>
+            Not accepted because this student already has a finalized result for
+            this Course Test.
           </Text>
-        </Pressable>
+        </View>
+      ) : submission.sync_status === "failed" ? (
+        <View style={styles.issueMessageBox}>
+          <Text style={styles.failureText}>
+            Synchronization failed. Submit this Batch again to retry unresolved
+            scans.
+          </Text>
+        </View>
       ) : null}
     </View>
   );
 }
 
-function SummaryItem({ label, value }: { label: string; value: number }) {
+type SummaryTone = "neutral" | "ready" | "review" | "issues" | "synced";
+
+function SummaryItem({
+  label,
+  value,
+  tone = "neutral",
+}: {
+  label: string;
+  value: number;
+  tone?: SummaryTone;
+}) {
   return (
-    <View style={styles.summaryItem}>
+    <View
+      style={[
+        styles.summaryItem,
+
+        tone === "ready" && styles.summaryItemReady,
+
+        tone === "review" && styles.summaryItemReview,
+
+        tone === "issues" && styles.summaryItemIssues,
+
+        tone === "synced" && styles.summaryItemSynced,
+      ]}
+    >
       <Text style={styles.summaryValue}>{value}</Text>
+
       <Text style={styles.summaryLabel}>{label}</Text>
     </View>
   );
@@ -647,14 +872,107 @@ function canRemoveSubmission(
   );
 }
 
-function getQualityPresentation(submission: ParsedLocalOmrSubmission): {
+function getSubmissionCardPresentation(submission: ParsedLocalOmrSubmission): {
   label: string;
   tone: BadgeTone;
 } {
+  if (submission.sync_status === "synced") {
+    if (
+      submission.server_status === "review_required" ||
+      submission.server_requires_review === true
+    ) {
+      return {
+        label: "Synced · Review",
+        tone: "warning",
+      };
+    }
+
+    return {
+      label: "Synced",
+      tone: "success",
+    };
+  }
+
+  if (submission.sync_status === "rejected") {
+    return {
+      label: "Not Accepted",
+      tone: "danger",
+    };
+  }
+
+  if (submission.sync_status === "failed") {
+    return {
+      label: "Sync Failed",
+      tone: "danger",
+    };
+  }
+
+  if (submission.sync_status === "syncing") {
+    return {
+      label: "Syncing",
+      tone: "primary",
+    };
+  }
+
+  if (submission.batch_uuid !== null) {
+    return {
+      label: "Retry Pending",
+      tone: "primary",
+    };
+  }
+
   if (submission.requires_review) {
     return {
       label: "Needs Review",
       tone: "warning",
+    };
+  }
+
+  if (submission.local_review?.state === "resolved") {
+    return {
+      label: "Reviewed · Ready",
+      tone: "success",
+    };
+  }
+
+  return {
+    label: "Ready",
+    tone: "success",
+  };
+}
+
+function shortBatchUuid(value: string): string {
+  const trimmed = value.trim();
+
+  if (trimmed.length <= 14) {
+    return trimmed.toUpperCase();
+  }
+
+  return `${trimmed.slice(0, 10).toUpperCase()}…`;
+}
+
+function getQualityPresentation(submission: ParsedLocalOmrSubmission): {
+  label: string;
+  tone: BadgeTone;
+} {
+  if (submission.server_requires_review === true) {
+    return {
+      label: "Server Review",
+      tone: "warning",
+    };
+  }
+
+  if (submission.requires_review) {
+    return {
+      label: "Needs Review",
+      tone: "warning",
+    };
+  }
+
+  if (submission.local_review?.state === "resolved") {
+    return {
+      label: "Reviewed · Ready",
+      tone: "success",
     };
   }
 
@@ -676,6 +994,16 @@ function getSyncPresentation(submission: ParsedLocalOmrSubmission): {
       };
 
     case "synced":
+      if (
+        submission.server_status === "review_required" ||
+        submission.server_requires_review === true
+      ) {
+        return {
+          label: "Synced · Review",
+          tone: "warning",
+        };
+      }
+
       return {
         label: "Synced",
         tone: "success",
@@ -695,9 +1023,16 @@ function getSyncPresentation(submission: ParsedLocalOmrSubmission): {
 
     case "pending":
     default:
+      if (submission.requires_review && submission.batch_uuid === null) {
+        return {
+          label: "Review First",
+          tone: "warning",
+        };
+      }
+
       return {
-        label: "Waiting",
-        tone: "neutral",
+        label: submission.batch_uuid ? "Retry Pending" : "Ready to Sync",
+        tone: submission.batch_uuid ? "primary" : "neutral",
       };
   }
 }
@@ -742,7 +1077,8 @@ function getBatchStatusPresentation(status: LocalScanBatchStatus): {
 
 function getSubmitButtonLabel(
   batch: LocalScanBatchSummary,
-  outstandingCount: number,
+  syncableCount: number,
+  reviewCount: number,
   isSyncing: boolean,
 ): string {
   if (isSyncing) {
@@ -753,15 +1089,23 @@ function getSubmitButtonLabel(
     return "Batch Complete";
   }
 
-  if (outstandingCount <= 0 || batch.status === "submitted") {
+  if (batch.status === "submitted") {
+    return "Batch Submitted";
+  }
+
+  if (syncableCount <= 0 && reviewCount > 0) {
+    return `Review Required (${reviewCount})`;
+  }
+
+  if (syncableCount <= 0) {
     return "Batch Submitted";
   }
 
   if (batch.status === "needs_attention") {
-    return `Continue Submission (${outstandingCount})`;
+    return `Continue Submission (${syncableCount})`;
   }
 
-  return `Submit ${outstandingCount} Submission${outstandingCount === 1 ? "" : "s"}`;
+  return `Submit ${syncableCount} Submission${syncableCount === 1 ? "" : "s"}`;
 }
 
 function formatScore(value: number | null): string {
@@ -825,6 +1169,36 @@ const styles = StyleSheet.create({
     paddingHorizontal: theme.spacing.screenHorizontal,
   },
 
+  pageHeader: {
+    minHeight: 52,
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: theme.spacing.md,
+  },
+
+  headerBackButton: {
+    width: 36,
+    height: 40,
+    alignItems: "flex-start",
+    justifyContent: "center",
+    marginRight: theme.spacing.xs,
+  },
+
+  headerBackIcon: {
+    marginTop: -3,
+    fontSize: 32,
+    lineHeight: 34,
+    color: theme.colors.text,
+  },
+
+  pageTitle: {
+    flex: 1,
+    fontSize: 20,
+    lineHeight: 26,
+    fontWeight: "700",
+    color: theme.colors.text,
+  },
+
   backButton: {
     alignSelf: "flex-start",
     flexDirection: "row",
@@ -846,9 +1220,17 @@ const styles = StyleSheet.create({
     color: theme.colors.primary,
   },
 
+  scanBatchLabel: {
+    marginLeft: 4,
+    marginBottom: 4,
+    ...theme.typography.bodyStrong,
+    color: theme.colors.text,
+  },
+
   headerCard: {
-    padding: theme.spacing.cardPadding,
-    marginBottom: theme.spacing.xxl,
+    paddingHorizontal: theme.spacing.lg,
+    paddingVertical: theme.spacing.md,
+    marginBottom: theme.spacing.lg,
     borderWidth: 1,
     borderColor: theme.colors.border,
     borderRadius: theme.radius.lg,
@@ -856,49 +1238,56 @@ const styles = StyleSheet.create({
     ...theme.shadows.card,
   },
 
-  headerTopRow: {
+  batchCourseRow: {
     flexDirection: "row",
     alignItems: "flex-start",
     justifyContent: "space-between",
-    gap: theme.spacing.md,
-  },
-
-  headerTitleGroup: {
-    flex: 1,
-  },
-
-  eyebrow: {
-    ...theme.typography.sectionTitle,
-    color: theme.colors.primary,
-  },
-
-  title: {
-    marginTop: theme.spacing.xs,
-    ...theme.typography.screenTitle,
-    color: theme.colors.text,
+    gap: theme.spacing.sm,
   },
 
   courseLine: {
-    marginTop: theme.spacing.sm,
-    ...theme.typography.body,
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "700",
     color: theme.colors.textSecondary,
   },
 
   summaryGrid: {
     flexDirection: "row",
-    marginTop: theme.spacing.xl,
-    paddingTop: theme.spacing.lg,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: theme.colors.divider,
+    gap: 8,
+    marginTop: theme.spacing.sm,
   },
 
   summaryItem: {
     flex: 1,
-    alignItems: "center",
+    minHeight: 54,
+    justifyContent: "center",
+    paddingHorizontal: 6,
+    paddingVertical: 7,
+    borderRadius: 7,
+    backgroundColor: theme.colors.surfaceMuted,
+  },
+
+  summaryItemReady: {
+    backgroundColor: "#EAF7EC",
+  },
+
+  summaryItemReview: {
+    backgroundColor: theme.colors.warningSoft,
+  },
+
+  summaryItemIssues: {
+    backgroundColor: theme.colors.dangerSoft,
+  },
+
+  summaryItemSynced: {
+    backgroundColor: "#DCFCE7",
   },
 
   summaryValue: {
-    fontSize: 18,
+    fontSize: 17,
+    lineHeight: 20,
     fontWeight: "700",
     color: theme.colors.text,
   },
@@ -906,19 +1295,36 @@ const styles = StyleSheet.create({
   summaryLabel: {
     marginTop: 2,
     fontSize: 10,
+    lineHeight: 13,
     color: theme.colors.textMuted,
   },
 
   submitButton: {
-    minHeight: 52,
+    minHeight: 42,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: theme.spacing.sm,
-    marginTop: theme.spacing.xl,
+    marginTop: theme.spacing.sm,
     paddingHorizontal: theme.spacing.lg,
-    borderRadius: theme.radius.md,
+    borderRadius: 6,
     backgroundColor: theme.colors.primary,
+  },
+
+  submitButtonComplete: {
+    backgroundColor: "#166534",
+  },
+
+  submitButtonWarning: {
+    backgroundColor: theme.colors.warning,
+  },
+
+  submitButtonDanger: {
+    backgroundColor: theme.colors.danger,
+  },
+
+  submitButtonDisabled: {
+    opacity: 0.55,
   },
 
   submitButtonText: {
@@ -926,9 +1332,25 @@ const styles = StyleSheet.create({
     color: theme.colors.textInverse,
   },
 
-  submitHint: {
+  batchHintRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 7,
     marginTop: theme.spacing.sm,
-    ...theme.typography.caption,
+    paddingHorizontal: 2,
+  },
+
+  batchHintIcon: {
+    marginTop: 1,
+    fontSize: 14,
+    lineHeight: 17,
+    color: theme.colors.textSecondary,
+  },
+
+  submitHint: {
+    flex: 1,
+    fontSize: 10,
+    lineHeight: 14,
     color: theme.colors.textMuted,
   },
 
@@ -937,12 +1359,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     gap: theme.spacing.md,
+    marginHorizontal: 4,
     marginBottom: theme.spacing.sm,
   },
 
   sectionHeading: {
-    ...theme.typography.sectionTitle,
-    color: theme.colors.textSecondary,
+    fontSize: 19,
+    lineHeight: 24,
+    fontWeight: "700",
+    color: theme.colors.text,
   },
 
   sectionHeadingHint: {
@@ -955,7 +1380,11 @@ const styles = StyleSheet.create({
   },
 
   submissionCard: {
-    padding: theme.spacing.cardPadding,
+    position: "relative",
+    overflow: "hidden",
+    paddingLeft: theme.spacing.lg,
+    paddingRight: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
     borderWidth: 1,
     borderColor: theme.colors.border,
     borderRadius: theme.radius.lg,
@@ -963,103 +1392,209 @@ const styles = StyleSheet.create({
     ...theme.shadows.card,
   },
 
-  submissionTopRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    gap: theme.spacing.md,
+  submissionCardSuccess: {
+    borderColor: "#CFEBD5",
   },
 
-  studentGroup: {
-    flex: 1,
+  submissionCardWarning: {
+    borderColor: "#F2D57C",
+  },
+
+  submissionCardDanger: {
+    borderColor: "#F6B8BC",
+  },
+
+  submissionCardPrimary: {
+    borderColor: theme.colors.primary,
+  },
+
+  submissionAccent: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: 7,
+    backgroundColor: theme.colors.border,
+  },
+
+  submissionAccentReady: {
+    backgroundColor: "#55B96B",
+  },
+
+  submissionAccentComplete: {
+    backgroundColor: "#166534",
+  },
+
+  submissionAccentReview: {
+    backgroundColor: theme.colors.warning,
+  },
+
+  submissionAccentDanger: {
+    backgroundColor: theme.colors.danger,
+  },
+
+  submissionAccentPrimary: {
+    backgroundColor: theme.colors.primary,
+  },
+
+  submissionMainRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.sm,
+  },
+
+  submissionIdentity: {
+    flex: 1.25,
+    minWidth: 0,
   },
 
   studentId: {
-    ...theme.typography.cardTitle,
-    color: theme.colors.text,
-  },
-
-  captureTime: {
-    marginTop: theme.spacing.xs,
-    ...theme.typography.caption,
-    color: theme.colors.textMuted,
-  },
-
-  scoreRow: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-    justifyContent: "space-between",
-    gap: theme.spacing.md,
-    marginTop: theme.spacing.lg,
-    paddingTop: theme.spacing.md,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: theme.colors.divider,
-  },
-
-  scoreLabel: {
-    ...theme.typography.caption,
-    color: theme.colors.textMuted,
-  },
-
-  scoreValue: {
-    marginTop: 2,
-    fontSize: 20,
+    fontSize: 14,
+    lineHeight: 18,
     fontWeight: "700",
     color: theme.colors.text,
   },
 
-  reviewBox: {
-    marginTop: theme.spacing.md,
-    padding: theme.spacing.md,
-    borderRadius: theme.radius.md,
+  captureTime: {
+    marginTop: 1,
+    fontSize: 10,
+    lineHeight: 14,
+    color: theme.colors.textMuted,
+  },
+
+  scoreBlock: {
+    minWidth: 78,
+    alignItems: "flex-start",
+  },
+
+  scoreLabel: {
+    fontSize: 9,
+    lineHeight: 12,
+    color: theme.colors.textMuted,
+  },
+
+  scoreValue: {
+    marginTop: 1,
+    fontSize: 17,
+    lineHeight: 20,
+    fontWeight: "600",
+    color: theme.colors.text,
+  },
+
+  submissionBottomRow: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    gap: theme.spacing.sm,
+    marginTop: theme.spacing.sm,
+    paddingTop: theme.spacing.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.colors.divider,
+  },
+
+  localStateBox: {
+    flex: 1,
+    minHeight: 34,
+    justifyContent: "center",
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 5,
+    borderRadius: 6,
+  },
+
+  localStateBoxReview: {
     backgroundColor: theme.colors.warningSoft,
   },
 
-  reviewTitle: {
-    ...theme.typography.label,
+  localStateBoxReady: {
+    backgroundColor: "#EAF7EC",
+  },
+
+  localStateTitle: {
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: "700",
+  },
+
+  localStateTitleReview: {
     color: theme.colors.warning,
   },
 
-  reviewText: {
-    marginTop: theme.spacing.xs,
-    ...theme.typography.caption,
-    color: theme.colors.textSecondary,
+  localStateTitleReady: {
+    color: "#2E7D32",
   },
 
-  failureText: {
-    marginTop: theme.spacing.md,
-    ...theme.typography.caption,
-    color: theme.colors.danger,
+  localStateText: {
+    marginTop: 1,
+    fontSize: 9,
+    lineHeight: 12,
+    color: theme.colors.textMuted,
+  },
+
+  cardActionRow: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    gap: 6,
+  },
+
+  reviewButton: {
+    minHeight: 34,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 10,
+    borderRadius: 6,
+    backgroundColor: theme.colors.primary,
+  },
+
+  reviewButtonText: {
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: "700",
+    color: theme.colors.textInverse,
   },
 
   removeButton: {
-    minHeight: 42,
+    minHeight: 34,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: theme.spacing.sm,
-    marginTop: theme.spacing.lg,
-    paddingHorizontal: theme.spacing.lg,
+    gap: 4,
+    paddingHorizontal: 10,
     borderWidth: 1,
     borderColor: theme.colors.danger,
-    borderRadius: theme.radius.md,
+    borderRadius: 6,
     backgroundColor: theme.colors.surface,
   },
 
   removeButtonText: {
-    ...theme.typography.bodyStrong,
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: "600",
+    color: theme.colors.danger,
+  },
+
+  issueMessageBox: {
+    marginTop: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 6,
+    borderRadius: 6,
+    backgroundColor: theme.colors.dangerSoft,
+  },
+
+  failureText: {
+    fontSize: 10,
+    lineHeight: 14,
     color: theme.colors.danger,
   },
 
   badge: {
+    flexShrink: 0,
     paddingHorizontal: theme.spacing.sm,
-    paddingVertical: 5,
+    paddingVertical: 4,
     borderRadius: theme.radius.pill,
     backgroundColor: theme.colors.surfaceMuted,
   },
 
   badgeSuccess: {
-    backgroundColor: theme.colors.successSoft,
+    backgroundColor: "#EAF7EC",
   },
 
   badgeWarning: {
@@ -1075,12 +1610,14 @@ const styles = StyleSheet.create({
   },
 
   badgeText: {
-    ...theme.typography.label,
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: "700",
     color: theme.colors.textMuted,
   },
 
   badgeTextSuccess: {
-    color: theme.colors.success,
+    color: "#2E7D32",
   },
 
   badgeTextWarning: {
@@ -1096,7 +1633,7 @@ const styles = StyleSheet.create({
   },
 
   pressed: {
-    opacity: 0.78,
+    opacity: 0.75,
   },
 
   disabled: {
@@ -1104,7 +1641,7 @@ const styles = StyleSheet.create({
   },
 
   emptyCard: {
-    minHeight: 180,
+    minHeight: 140,
     alignItems: "center",
     justifyContent: "center",
     padding: theme.spacing.xxl,

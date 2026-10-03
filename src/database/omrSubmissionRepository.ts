@@ -5,11 +5,19 @@ import {
   getOrCreateDraftScanBatch,
 } from "@/database/scanBatchRepository";
 
-import type {
-  OmrQuestionCount,
-  OmrSheetFormat,
-  OmrSubmissionPayload,
+import {
+  reopenOmrReviewQuestion,
+  resolveOmrReviewQuestion,
+  type OmrLocalReview,
+  type OmrQuestionCount,
+  type OmrSheetFormat,
+  type OmrSubmissionPayload,
 } from "@/../modules/gradelens-omr/submission";
+
+import {
+  scoreOmrSubmission,
+  type AnswerKey,
+} from "@/../modules/gradelens-omr/scoring";
 
 export type LocalOmrSubmissionSyncStatus =
   | "pending"
@@ -88,6 +96,7 @@ export type LocalOmrSubmission = {
   questions_json: string;
   review_question_numbers_json: string;
   counts_json: string;
+  local_review_json: string | null;
 
   tentative_score: number;
 
@@ -116,6 +125,7 @@ export type ParsedLocalOmrSubmission = Omit<
   | "questions_json"
   | "review_question_numbers_json"
   | "counts_json"
+  | "local_review_json"
   | "requires_review"
   | "server_requires_review"
   | "is_flagged"
@@ -124,6 +134,7 @@ export type ParsedLocalOmrSubmission = Omit<
   questions: OmrSubmissionPayload["questions"];
   review_question_numbers: OmrSubmissionPayload["review_question_numbers"];
   counts: OmrSubmissionPayload["counts"];
+  local_review: OmrLocalReview | undefined;
 
   requires_review: boolean;
   server_requires_review: boolean | null;
@@ -202,6 +213,7 @@ const SELECT_COLUMNS = `
   questions_json,
   review_question_numbers_json,
   counts_json,
+  local_review_json,
 
   tentative_score,
 
@@ -244,6 +256,9 @@ function parseStoredSubmission(
     questions: JSON.parse(row.questions_json),
     review_question_numbers: JSON.parse(row.review_question_numbers_json),
     counts: JSON.parse(row.counts_json),
+    local_review: row.local_review_json
+      ? (JSON.parse(row.local_review_json) as OmrLocalReview)
+      : undefined,
 
     tentative_score: row.tentative_score,
 
@@ -268,6 +283,264 @@ function parseStoredSubmission(
     updated_at: row.updated_at,
     synced_at: row.synced_at,
   };
+}
+
+function buildStoredOmrPayload(
+  submission: ParsedLocalOmrSubmission,
+): OmrSubmissionPayload {
+  return {
+    format: submission.format,
+    question_count: submission.question_count,
+    answers: { ...submission.answers },
+    questions: submission.questions.map((question) => ({
+      ...question,
+      selected_choices: [...question.selected_choices],
+      shaded_choices: [...question.shaded_choices],
+      crossed_choices: [...question.crossed_choices],
+      invalid_choices: [...question.invalid_choices],
+    })),
+    review_question_numbers: [...submission.review_question_numbers],
+    counts: {
+      ...submission.counts,
+      statuses: { ...submission.counts.statuses },
+    },
+    local_review: submission.local_review
+      ? {
+          ...submission.local_review,
+          original_review_question_numbers: [
+            ...submission.local_review.original_review_question_numbers,
+          ],
+          unresolved_question_numbers: [
+            ...submission.local_review.unresolved_question_numbers,
+          ],
+          resolved_question_numbers: [
+            ...submission.local_review.resolved_question_numbers,
+          ],
+          resolutions: Object.fromEntries(
+            Object.entries(submission.local_review.resolutions).map(
+              ([questionNumber, resolution]) => [
+                questionNumber,
+                {
+                  ...resolution,
+                  original_selected_choices: [
+                    ...resolution.original_selected_choices,
+                  ],
+                  original_shaded_choices: [
+                    ...resolution.original_shaded_choices,
+                  ],
+                  original_crossed_choices: [
+                    ...resolution.original_crossed_choices,
+                  ],
+                  original_invalid_choices: [
+                    ...resolution.original_invalid_choices,
+                  ],
+                  resolved_choices: [...resolution.resolved_choices],
+                },
+              ],
+            ),
+          ),
+        }
+      : undefined,
+  };
+}
+
+export function getOmrPayloadFromLocalSubmission(
+  submission: ParsedLocalOmrSubmission,
+): OmrSubmissionPayload {
+  return buildStoredOmrPayload(submission);
+}
+
+/*
+ * Persist only LOCAL faculty clarification state.
+ *
+ * The original questions_json and counts_json are intentionally not changed.
+ * They remain the native machine evidence captured at scan time.
+ *
+ * Review editing is allowed only before a server batch_uuid exists.
+ */
+async function saveLocalOmrReviewPayload(
+  submissionUuid: string,
+  payload: OmrSubmissionPayload,
+  tentativeScore: number,
+): Promise<ParsedLocalOmrSubmission> {
+  const normalizedUuid = submissionUuid.trim();
+
+  if (!normalizedUuid) {
+    throw new Error("Submission UUID is required.");
+  }
+
+  if (!Number.isFinite(tentativeScore)) {
+    throw new Error("Tentative score must be a finite number.");
+  }
+
+  const db = await getDatabase();
+
+  const stored = await db.getFirstAsync<LocalOmrSubmission>(
+    `
+      SELECT
+        ${SELECT_COLUMNS}
+
+      FROM omr_submissions
+
+      WHERE submission_uuid = ?
+      LIMIT 1
+    `,
+    [normalizedUuid],
+  );
+
+  if (!stored) {
+    throw new Error(`Local OMR submission ${normalizedUuid} was not found.`);
+  }
+
+  const current = parseStoredSubmission(stored);
+
+  if (current.batch_uuid !== null || current.sync_status !== "pending") {
+    throw new Error(
+      "This scan can no longer be reviewed locally because synchronization has already started.",
+    );
+  }
+
+  if (
+    payload.format !== current.format ||
+    payload.question_count !== current.question_count
+  ) {
+    throw new Error(
+      "The reviewed OMR payload does not match the stored sheet format.",
+    );
+  }
+
+  const requiresReview = payload.review_question_numbers.length > 0 ? 1 : 0;
+
+  const now = new Date().toISOString();
+
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `
+        UPDATE omr_submissions
+
+        SET
+          answers_json = ?,
+          review_question_numbers_json = ?,
+          local_review_json = ?,
+          tentative_score = ?,
+          requires_review = ?,
+          last_error = NULL,
+          updated_at = ?
+
+        WHERE submission_uuid = ?
+          AND batch_uuid IS NULL
+          AND sync_status = 'pending'
+      `,
+      [
+        JSON.stringify(payload.answers),
+        JSON.stringify(payload.review_question_numbers),
+        payload.local_review ? JSON.stringify(payload.local_review) : null,
+        tentativeScore,
+        requiresReview,
+        now,
+        normalizedUuid,
+      ],
+    );
+
+    await db.runAsync(
+      `
+        UPDATE course_test_results
+
+        SET
+          tentative_score = ?,
+          sync_status = ?,
+          updated_at = ?,
+          synced_at = NULL
+
+        WHERE crs_tst_id = ?
+          AND std_id = ?
+          AND final_score IS NULL
+      `,
+      [
+        tentativeScore,
+        requiresReview === 1 ? "needs_review" : "pending",
+        now,
+        current.crs_tst_id,
+        current.std_id,
+      ],
+    );
+  });
+
+  const updated = await getOmrSubmissionByUuid(normalizedUuid);
+
+  if (!updated) {
+    throw new Error(
+      `Local OMR submission ${normalizedUuid} disappeared after review update.`,
+    );
+  }
+
+  return updated;
+}
+
+/*
+ * Faculty resolves one machine-uncertain question before synchronization.
+ *
+ * `answerKey` is the already-decrypted local OMR answer key for this Course
+ * Test. The tentative score is recomputed immediately so the list/result UI
+ * stays consistent with the faculty-confirmed effective answer.
+ */
+export async function resolveLocalOmrReviewQuestion(
+  submissionUuid: string,
+  questionNumber: number,
+  resolvedChoices: string[],
+  answerKey: AnswerKey,
+  reviewedAt: string = new Date().toISOString(),
+): Promise<ParsedLocalOmrSubmission> {
+  const current = await getOmrSubmissionByUuid(submissionUuid);
+
+  if (!current) {
+    throw new Error(`Local OMR submission ${submissionUuid} was not found.`);
+  }
+
+  const reviewedPayload = resolveOmrReviewQuestion(
+    buildStoredOmrPayload(current),
+    questionNumber,
+    resolvedChoices,
+    reviewedAt,
+  );
+
+  const score = scoreOmrSubmission(reviewedPayload, answerKey);
+
+  return await saveLocalOmrReviewPayload(
+    submissionUuid,
+    reviewedPayload,
+    score.score,
+  );
+}
+
+/*
+ * Reopen a faculty clarification before sync. This restores the original
+ * machine effective answer for that question and makes the paper Needs Review
+ * again.
+ */
+export async function reopenLocalOmrReviewQuestion(
+  submissionUuid: string,
+  questionNumber: number,
+  answerKey: AnswerKey,
+): Promise<ParsedLocalOmrSubmission> {
+  const current = await getOmrSubmissionByUuid(submissionUuid);
+
+  if (!current) {
+    throw new Error(`Local OMR submission ${submissionUuid} was not found.`);
+  }
+
+  const reopenedPayload = reopenOmrReviewQuestion(
+    buildStoredOmrPayload(current),
+    questionNumber,
+  );
+
+  const score = scoreOmrSubmission(reopenedPayload, answerKey);
+
+  return await saveLocalOmrReviewPayload(
+    submissionUuid,
+    reopenedPayload,
+    score.score,
+  );
 }
 
 /*
@@ -364,6 +637,9 @@ export async function savePendingOmrSubmission(
     input.payload.review_question_numbers,
   );
   const countsJson = JSON.stringify(input.payload.counts);
+  const localReviewJson = input.payload.local_review
+    ? JSON.stringify(input.payload.local_review)
+    : null;
 
   const requiresReview =
     input.payload.review_question_numbers.length > 0 ? 1 : 0;
@@ -393,6 +669,7 @@ export async function savePendingOmrSubmission(
           questions_json,
           review_question_numbers_json,
           counts_json,
+          local_review_json,
 
           tentative_score,
 
@@ -420,7 +697,7 @@ export async function savePendingOmrSubmission(
           ?, ?,
           ?, ?,
           ?, ?,
-          ?, ?, ?, ?,
+          ?, ?, ?, ?, ?,
           ?,
           ?, NULL,
           'pending', NULL, NULL,
@@ -442,6 +719,7 @@ export async function savePendingOmrSubmission(
         questionsJson,
         reviewQuestionNumbersJson,
         countsJson,
+        localReviewJson,
         input.tentative_score,
         scanBatch.scan_batch_uuid,
         requiresReview,
@@ -463,16 +741,22 @@ export async function savePendingOmrSubmission(
           synced_at
         )
 
-        VALUES (?, ?, ?, NULL, 'pending', ?, NULL)
+        VALUES (?, ?, ?, NULL, ?, ?, NULL)
 
         ON CONFLICT(crs_tst_id, std_id)
         DO UPDATE SET
           tentative_score = excluded.tentative_score,
-          sync_status = 'pending',
+          sync_status = excluded.sync_status,
           updated_at = excluded.updated_at,
           synced_at = NULL
       `,
-      [input.crs_tst_id, input.std_id, input.tentative_score, now],
+      [
+        input.crs_tst_id,
+        input.std_id,
+        input.tentative_score,
+        requiresReview === 1 ? "needs_review" : "pending",
+        now,
+      ],
     );
   });
 }
@@ -492,6 +776,103 @@ export async function getPendingOmrSubmissions(): Promise<
 
     ORDER BY created_at ASC
   `);
+
+  return rows.map(parseStoredSubmission);
+}
+
+/*
+ * Only these unbatched rows may enter a NEW Laravel batch.
+ *
+ * Needs Review papers intentionally stay local and are not assigned a
+ * batch_uuid until every review question has been faculty-resolved.
+ */
+export async function getReadyOmrSubmissionsForScanBatch(
+  scanBatchUuid: string,
+): Promise<ParsedLocalOmrSubmission[]> {
+  const normalizedUuid = scanBatchUuid.trim();
+
+  if (!normalizedUuid) {
+    return [];
+  }
+
+  const db = await getDatabase();
+
+  const rows = await db.getAllAsync<LocalOmrSubmission>(
+    `
+      SELECT
+        ${SELECT_COLUMNS}
+
+      FROM omr_submissions
+
+      WHERE scan_batch_uuid = ?
+        AND sync_status = 'pending'
+        AND batch_uuid IS NULL
+        AND requires_review = 0
+
+      ORDER BY created_at ASC, submission_uuid ASC
+    `,
+    [normalizedUuid],
+  );
+
+  return rows.map(parseStoredSubmission);
+}
+
+export async function getNeedsReviewOmrSubmissionsForScanBatch(
+  scanBatchUuid: string,
+): Promise<ParsedLocalOmrSubmission[]> {
+  const normalizedUuid = scanBatchUuid.trim();
+
+  if (!normalizedUuid) {
+    return [];
+  }
+
+  const db = await getDatabase();
+
+  const rows = await db.getAllAsync<LocalOmrSubmission>(
+    `
+      SELECT
+        ${SELECT_COLUMNS}
+
+      FROM omr_submissions
+
+      WHERE scan_batch_uuid = ?
+        AND sync_status = 'pending'
+        AND batch_uuid IS NULL
+        AND requires_review = 1
+
+      ORDER BY created_at ASC, submission_uuid ASC
+    `,
+    [normalizedUuid],
+  );
+
+  return rows.map(parseStoredSubmission);
+}
+
+export async function getRetryableOmrSubmissionsForBatch(
+  batchUuid: string,
+): Promise<ParsedLocalOmrSubmission[]> {
+  const normalizedUuid = batchUuid.trim();
+
+  if (!normalizedUuid) {
+    return [];
+  }
+
+  const db = await getDatabase();
+
+  const rows = await db.getAllAsync<LocalOmrSubmission>(
+    `
+      SELECT
+        ${SELECT_COLUMNS}
+
+      FROM omr_submissions
+
+      WHERE batch_uuid = ?
+        AND sync_status IN ('pending', 'failed', 'syncing')
+
+      ORDER BY created_at ASC, submission_uuid ASC
+    `,
+    [normalizedUuid],
+  );
 
   return rows.map(parseStoredSubmission);
 }
@@ -575,6 +956,57 @@ export async function assignOmrBatchUuid(
   const db = await getDatabase();
   const now = new Date().toISOString();
 
+  /*
+   * Defensive synchronization gate.
+   *
+   * Even if a caller forgets to use getReadyOmrSubmissionsForScanBatch(),
+   * a Needs Review row is never frozen into a server batch.
+   */
+  for (const submissionUuid of submissionUuids) {
+    const row = await db.getFirstAsync<{
+      submission_uuid: string;
+      batch_uuid: string | null;
+      sync_status: LocalOmrSubmissionSyncStatus;
+      requires_review: number;
+    }>(
+      `
+        SELECT
+          submission_uuid,
+          batch_uuid,
+          sync_status,
+          requires_review
+
+        FROM omr_submissions
+
+        WHERE submission_uuid = ?
+        LIMIT 1
+      `,
+      [submissionUuid],
+    );
+
+    if (!row) {
+      throw new Error(`Local OMR submission ${submissionUuid} was not found.`);
+    }
+
+    if (row.requires_review === 1) {
+      throw new Error(
+        `Submission ${submissionUuid} still needs faculty review and cannot enter a sync batch.`,
+      );
+    }
+
+    if (row.batch_uuid !== null) {
+      throw new Error(
+        `Submission ${submissionUuid} already belongs to server batch ${row.batch_uuid}.`,
+      );
+    }
+
+    if (row.sync_status !== "pending") {
+      throw new Error(
+        `Submission ${submissionUuid} is not a ready local draft (status=${row.sync_status}).`,
+      );
+    }
+  }
+
   await db.withTransactionAsync(async () => {
     for (const submissionUuid of submissionUuids) {
       await db.runAsync(
@@ -589,7 +1021,8 @@ export async function assignOmrBatchUuid(
 
           WHERE submission_uuid = ?
             AND batch_uuid IS NULL
-            AND sync_status != 'synced'
+            AND sync_status = 'pending'
+            AND requires_review = 0
         `,
         [batchUuid, now, submissionUuid],
       );

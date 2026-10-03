@@ -9,6 +9,7 @@ import org.opencv.core.MatOfPoint
 import org.opencv.core.Rect
 import org.opencv.core.Size
 import org.opencv.imgcodecs.Imgcodecs
+import org.opencv.imgproc.CLAHE
 import org.opencv.imgproc.Imgproc
 import org.tensorflow.lite.Interpreter
 import java.io.File
@@ -24,6 +25,10 @@ data class StudentIdDigitResult(
     val position: Int,
     val digit: Int,
     val confidence: Float,
+    val reliable: Boolean,
+    val consensusCount: Int,
+    val variantCount: Int,
+    val recognitionMethod: String,
     val cropUri: String,
     val binaryUri: String,
     val modelInputUri: String
@@ -83,12 +88,37 @@ class StudentIdRecognizer(
             28
 
         /*
-         * Debug checkpoint only:
-         * anything below this confidence is considered weak.
-         * We are not using this to reject permanently yet.
+         * Multi-pass Student ID recognition.
+         *
+         * A digit is accepted when either:
+         * - at least two independent preprocessing variants agree with usable
+         *   confidence, or
+         * - one variant is exceptionally strong even when the others disagree.
+         *
+         * This prevents ordinary lighting variation from turning a correct
+         * digit into an automatic whole-ID failure while keeping a conservative
+         * fallback for genuinely conflicting predictions.
          */
-        private const val WEAK_CONFIDENCE_THRESHOLD =
+        private const val CONSENSUS_MIN_CONFIDENCE =
+            0.60f
+
+        private const val STRONG_SINGLE_MIN_CONFIDENCE =
+            0.90f
+
+        private const val VARIANT_TRIGGER_CONFIDENCE =
             0.80f
+
+        private const val CLAHE_CLIP_LIMIT =
+            2.0
+
+        private const val CLAHE_TILE_GRID =
+            4.0
+
+        private const val ADAPTIVE_BLOCK_SIZE =
+            15
+
+        private const val ADAPTIVE_C =
+            4.0
     }
 
     private val interpreter: Interpreter =
@@ -258,21 +288,52 @@ class StudentIdRecognizer(
         ).clone()
     }
 
+    private enum class PreprocessMode(
+        val wireName: String
+    ) {
+        OTSU("otsu"),
+        CLAHE_OTSU("clahe_otsu"),
+        CLAHE_ADAPTIVE("clahe_adaptive")
+    }
+
     private data class PreprocessDebugResult(
         val input: FloatArray,
         val binary: Mat,
-        val modelInputImage: Mat
+        val modelInputImage: Mat,
+        val mode: PreprocessMode
+    )
+
+    private data class DigitCandidate(
+        val digit: Int,
+        val confidence: Float,
+        val preprocessed: PreprocessDebugResult
+    )
+
+    private data class SelectedDigitCandidate(
+        val candidate: DigitCandidate,
+        val reliable: Boolean,
+        val consensusCount: Int,
+        val variantCount: Int,
+        val recognitionMethod: String
     )
 
     private fun preprocessDigit(
-        crop: Mat
+        crop: Mat,
+        mode: PreprocessMode
     ): PreprocessDebugResult {
 
         val gray =
             Mat()
 
+        val working =
+            Mat()
+
         val binary =
             Mat()
+
+        var clahe:
+            CLAHE? =
+            null
 
         try {
             Imgproc.cvtColor(
@@ -281,14 +342,75 @@ class StudentIdRecognizer(
                 Imgproc.COLOR_BGR2GRAY
             )
 
-            Imgproc.threshold(
-                gray,
-                binary,
-                0.0,
-                255.0,
-                Imgproc.THRESH_BINARY_INV or
-                    Imgproc.THRESH_OTSU
-            )
+            when (
+                mode
+            ) {
+                PreprocessMode.OTSU -> {
+                    gray.copyTo(
+                        working
+                    )
+
+                    Imgproc.threshold(
+                        working,
+                        binary,
+                        0.0,
+                        255.0,
+                        Imgproc.THRESH_BINARY_INV or
+                            Imgproc.THRESH_OTSU
+                    )
+                }
+
+                PreprocessMode.CLAHE_OTSU -> {
+                    clahe =
+                        Imgproc.createCLAHE(
+                            CLAHE_CLIP_LIMIT,
+                            Size(
+                                CLAHE_TILE_GRID,
+                                CLAHE_TILE_GRID
+                            )
+                        )
+
+                    clahe.apply(
+                        gray,
+                        working
+                    )
+
+                    Imgproc.threshold(
+                        working,
+                        binary,
+                        0.0,
+                        255.0,
+                        Imgproc.THRESH_BINARY_INV or
+                            Imgproc.THRESH_OTSU
+                    )
+                }
+
+                PreprocessMode.CLAHE_ADAPTIVE -> {
+                    clahe =
+                        Imgproc.createCLAHE(
+                            CLAHE_CLIP_LIMIT,
+                            Size(
+                                CLAHE_TILE_GRID,
+                                CLAHE_TILE_GRID
+                            )
+                        )
+
+                    clahe.apply(
+                        gray,
+                        working
+                    )
+
+                    Imgproc.adaptiveThreshold(
+                        working,
+                        binary,
+                        255.0,
+                        Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C,
+                        Imgproc.THRESH_BINARY_INV,
+                        ADAPTIVE_BLOCK_SIZE,
+                        ADAPTIVE_C
+                    )
+                }
+            }
 
             val contours =
                 mutableListOf<MatOfPoint>()
@@ -296,15 +418,19 @@ class StudentIdRecognizer(
             val hierarchy =
                 Mat()
 
+            val contourInput =
+                binary.clone()
+
             try {
                 Imgproc.findContours(
-                    binary.clone(),
+                    contourInput,
                     contours,
                     hierarchy,
                     Imgproc.RETR_EXTERNAL,
                     Imgproc.CHAIN_APPROX_SIMPLE
                 )
             } finally {
+                contourInput.release()
                 hierarchy.release()
             }
 
@@ -509,7 +635,10 @@ class StudentIdRecognizer(
                                     binary.clone(),
 
                                 modelInputImage =
-                                    transposed.clone()
+                                    transposed.clone(),
+
+                                mode =
+                                    mode
                             )
 
                         } finally {
@@ -530,8 +659,121 @@ class StudentIdRecognizer(
 
         } finally {
             gray.release()
+            working.release()
             binary.release()
+            clahe?.collectGarbage()
         }
+    }
+
+    private fun buildDigitCandidate(
+        crop: Mat,
+        mode: PreprocessMode
+    ): DigitCandidate {
+        val preprocessed =
+            preprocessDigit(
+                crop,
+                mode
+            )
+
+        val (
+            digit,
+            confidence
+        ) =
+            predictDigit(
+                preprocessed.input
+            )
+
+        return DigitCandidate(
+            digit =
+                digit,
+
+            confidence =
+                confidence,
+
+            preprocessed =
+                preprocessed
+        )
+    }
+
+    private fun selectDigitCandidate(
+        candidates: List<DigitCandidate>
+    ): SelectedDigitCandidate {
+        require(
+            candidates.isNotEmpty()
+        ) {
+            "At least one Student ID digit candidate is required."
+        }
+
+        val grouped =
+            candidates.groupBy {
+                it.digit
+            }
+
+        val winningGroup =
+            grouped.values
+                .sortedWith(
+                    compareByDescending<List<DigitCandidate>> {
+                        it.size
+                    }
+                        .thenByDescending {
+                            it.maxOf { candidate ->
+                                candidate.confidence
+                            }
+                        }
+                        .thenByDescending {
+                            it.map { candidate ->
+                                candidate.confidence
+                            }.average()
+                        }
+                )
+                .first()
+
+        val selected =
+            winningGroup.maxBy {
+                it.confidence
+            }
+
+        val consensusCount =
+            winningGroup.size
+
+        val reliable =
+            if (
+                consensusCount >=
+                    2
+            ) {
+                selected.confidence >=
+                    CONSENSUS_MIN_CONFIDENCE
+            } else {
+                selected.confidence >=
+                    STRONG_SINGLE_MIN_CONFIDENCE
+            }
+
+        val recognitionMethod =
+            if (
+                consensusCount >=
+                    2
+            ) {
+                "consensus"
+            } else {
+                "best_confidence"
+            }
+
+        return SelectedDigitCandidate(
+            candidate =
+                selected,
+
+            reliable =
+                reliable,
+
+            consensusCount =
+                consensusCount,
+
+            variantCount =
+                candidates.size,
+
+            recognitionMethod =
+                recognitionMethod
+        )
     }
 
     private fun predictDigit(
@@ -623,67 +865,117 @@ class StudentIdRecognizer(
                     index
                 )
 
+            val candidates =
+                mutableListOf<DigitCandidate>()
+
             try {
-                val preprocessed =
-                    preprocessDigit(
-                        crop
+                val originalCandidate =
+                    buildDigitCandidate(
+                        crop,
+                        PreprocessMode.OTSU
                     )
 
-                try {
-                    val (
-                        digit,
-                        confidence
-                    ) =
-                        predictDigit(
-                            preprocessed.input
-                        )
+                candidates.add(
+                    originalCandidate
+                )
 
-                    val cropUri =
-                        saveDebugMat(
+                val enhancedCandidate =
+                    buildDigitCandidate(
+                        crop,
+                        PreprocessMode.CLAHE_OTSU
+                    )
+
+                candidates.add(
+                    enhancedCandidate
+                )
+
+                /*
+                 * The adaptive variant is a fallback, not the default. Run it
+                 * only when the first two passes disagree or neither is strong.
+                 */
+                val shouldRunAdaptive =
+                    originalCandidate.digit !=
+                        enhancedCandidate.digit ||
+                    max(
+                        originalCandidate.confidence,
+                        enhancedCandidate.confidence
+                    ) <
+                        VARIANT_TRIGGER_CONFIDENCE
+
+                if (
+                    shouldRunAdaptive
+                ) {
+                    candidates.add(
+                        buildDigitCandidate(
                             crop,
-                            "${runId}_digit_${index + 1}_crop.png"
-                        )
-
-                    val binaryUri =
-                        saveDebugMat(
-                            preprocessed.binary,
-                            "${runId}_digit_${index + 1}_binary.png"
-                        )
-
-                    val modelInputUri =
-                        saveDebugMat(
-                            preprocessed.modelInputImage,
-                            "${runId}_digit_${index + 1}_model_28x28.png"
-                        )
-
-                    digitResults.add(
-                        StudentIdDigitResult(
-                            position =
-                                index + 1,
-
-                            digit =
-                                digit,
-
-                            confidence =
-                                confidence,
-
-                            cropUri =
-                                cropUri,
-
-                            binaryUri =
-                                binaryUri,
-
-                            modelInputUri =
-                                modelInputUri
+                            PreprocessMode.CLAHE_ADAPTIVE
                         )
                     )
-
-                } finally {
-                    preprocessed.binary.release()
-                    preprocessed.modelInputImage.release()
                 }
 
+                val selected =
+                    selectDigitCandidate(
+                        candidates
+                    )
+
+                val cropUri =
+                    saveDebugMat(
+                        crop,
+                        "${runId}_digit_${index + 1}_crop.png"
+                    )
+
+                val binaryUri =
+                    saveDebugMat(
+                        selected.candidate.preprocessed.binary,
+                        "${runId}_digit_${index + 1}_${selected.candidate.preprocessed.mode.wireName}_binary.png"
+                    )
+
+                val modelInputUri =
+                    saveDebugMat(
+                        selected.candidate.preprocessed.modelInputImage,
+                        "${runId}_digit_${index + 1}_${selected.candidate.preprocessed.mode.wireName}_model_28x28.png"
+                    )
+
+                digitResults.add(
+                    StudentIdDigitResult(
+                        position =
+                            index + 1,
+
+                        digit =
+                            selected.candidate.digit,
+
+                        confidence =
+                            selected.candidate.confidence,
+
+                        reliable =
+                            selected.reliable,
+
+                        consensusCount =
+                            selected.consensusCount,
+
+                        variantCount =
+                            selected.variantCount,
+
+                        recognitionMethod =
+                            selected.recognitionMethod,
+
+                        cropUri =
+                            cropUri,
+
+                        binaryUri =
+                            binaryUri,
+
+                        modelInputUri =
+                            modelInputUri
+                    )
+                )
+
             } finally {
+                candidates.forEach {
+                    it.preprocessed.binary.release()
+                    it.preprocessed.modelInputImage.release()
+                }
+
                 crop.release()
             }
         }
@@ -708,8 +1000,7 @@ class StudentIdRecognizer(
         val weakPositions =
             digitResults
                 .filter {
-                    it.confidence <
-                        WEAK_CONFIDENCE_THRESHOLD
+                    !it.reliable
                 }
                 .map {
                     it.position

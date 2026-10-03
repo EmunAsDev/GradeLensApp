@@ -4,7 +4,12 @@ export type HomeRecentBatch = {
   scan_batch_uuid: string;
   crs_tst_id: number;
   batch_number: number;
-  status: "draft" | "submitting" | "submitted" | "needs_attention";
+  status:
+    | "draft"
+    | "submitting"
+    | "submitted"
+    | "completed_with_issues"
+    | "needs_attention";
   created_at: string;
 
   course_code: string | null;
@@ -68,7 +73,8 @@ export async function getHomeDashboardSummary(
           COALESCE(
             SUM(
               CASE
-                WHEN sync_status IN ('pending', 'syncing', 'failed')
+                WHEN sync_status IN ('pending', 'syncing')
+                  AND requires_review = 0
                   THEN 1
                 ELSE 0
               END

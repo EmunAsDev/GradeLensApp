@@ -7,6 +7,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from "react-native";
 
@@ -20,8 +21,9 @@ import {
   type HomeUpcomingTest,
 } from "@/database/homeRepository";
 
+import { AppIcon } from "@/../components/icons/AppIcon";
 import { AppScreenHeader } from "@/../components/layout/AppScreenHeader";
-import { theme } from "@/../theme";
+import { getScreenHorizontalPadding, theme } from "@/../theme";
 
 const EMPTY_DASHBOARD: HomeDashboardSummary = {
   course_count: 0,
@@ -36,6 +38,10 @@ const EMPTY_DASHBOARD: HomeDashboardSummary = {
 
 export default function HomeScreen() {
   const { employee } = useAuth();
+
+  const { width } = useWindowDimensions();
+
+  const horizontalPadding = getScreenHorizontalPadding(width);
 
   const firstName = employee?.firstname?.trim() || "Faculty";
 
@@ -107,140 +113,216 @@ export default function HomeScreen() {
   const hasAttention = dashboard.review_count > 0 || dashboard.failed_count > 0;
 
   return (
-    <ScrollView
-      style={styles.screen}
-      contentContainerStyle={styles.content}
-      showsVerticalScrollIndicator={false}
-      refreshControl={
-        <RefreshControl
-          refreshing={isRefreshing}
-          onRefresh={handleRefresh}
-          tintColor={theme.colors.primary}
-        />
-      }
-    >
-      <AppScreenHeader
-        eyebrow="GradeLens"
-        title={`Hello, ${firstName}`}
-        subtitle="Here’s what’s happening on this device."
-      />
+    <View style={styles.screen}>
+      <AppScreenHeader variant="brand" />
 
-      <View style={styles.body}>
+      <ScrollView
+        style={styles.scrollView}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={handleRefresh}
+            tintColor={theme.colors.primary}
+            colors={[theme.colors.primary]}
+          />
+        }
+        contentContainerStyle={[
+          styles.content,
+          {
+            paddingHorizontal: horizontalPadding,
+          },
+        ]}
+      >
+        {/*
+         * ----------------------------------------------------------------------
+         * Welcome
+         * ----------------------------------------------------------------------
+         */}
+        <View style={styles.welcomeBlock}>
+          <Text style={styles.welcomeTitle}>Hello, {firstName}</Text>
+
+          <Text style={styles.welcomeSubtitle}>
+            Here’s what’s happening on this device.
+          </Text>
+        </View>
+
+        {/*
+         * ----------------------------------------------------------------------
+         * Overview
+         * ----------------------------------------------------------------------
+         */}
         <SectionTitle title="Overview" />
 
         <View style={styles.metricsRow}>
           <MetricCard
+            icon="courses"
             value={dashboard.course_count}
             label="Courses"
             onPress={() => router.push("/courses")}
           />
 
           <MetricCard
+            icon="review"
             value={dashboard.test_count}
             label="Tests"
             onPress={() => router.push("/courses")}
           />
 
           <MetricCard
+            icon={dashboard.failed_count > 0 ? "error" : "batch"}
             value={dashboard.waiting_count}
             label="Waiting"
-            tone={dashboard.failed_count > 0 ? "danger" : "default"}
+            tone={
+              dashboard.failed_count > 0
+                ? "danger"
+                : dashboard.waiting_count > 0
+                  ? "warning"
+                  : "default"
+            }
             onPress={() => router.push("/batch")}
           />
         </View>
 
+        {/*
+         * ----------------------------------------------------------------------
+         * Needs Attention
+         * ----------------------------------------------------------------------
+         */}
         <View style={styles.section}>
           <SectionTitle title="Needs Attention" />
 
           <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={
+              hasAttention
+                ? "Open scan items that need attention"
+                : "Open Batch"
+            }
             onPress={() => router.push("/batch")}
             style={({ pressed }) => [
               styles.attentionCard,
-              hasAttention ? styles.attentionCardActive : null,
+              hasAttention
+                ? styles.attentionCardActive
+                : styles.attentionCardClear,
               pressed && styles.pressed,
             ]}
           >
-            <View style={styles.attentionMain}>
-              <View
-                style={[
-                  styles.statusDot,
-                  {
-                    backgroundColor: hasAttention
-                      ? theme.colors.warning
-                      : theme.colors.success,
-                  },
-                ]}
+            <View
+              style={[
+                styles.attentionIcon,
+                hasAttention
+                  ? styles.attentionIconWarning
+                  : styles.attentionIconSuccess,
+              ]}
+            >
+              <AppIcon
+                name={hasAttention ? "review" : "success"}
+                size={22}
+                color={
+                  hasAttention ? theme.colors.warning : theme.colors.success
+                }
               />
-
-              <View style={styles.attentionContent}>
-                <Text style={styles.attentionTitle}>
-                  {hasAttention
-                    ? "Some scans need your attention"
-                    : "All clear"}
-                </Text>
-
-                {hasAttention ? (
-                  <Text style={styles.attentionText}>
-                    {dashboard.review_count} need review ·{" "}
-                    {dashboard.failed_count} failed to sync
-                  </Text>
-                ) : (
-                  <Text style={styles.attentionText}>
-                    No local scans currently need review or retry.
-                  </Text>
-                )}
-              </View>
             </View>
 
-            <Text style={styles.chevron}>›</Text>
+            <View style={styles.attentionContent}>
+              <Text style={styles.attentionTitle}>
+                {hasAttention ? "Some scans need your attention" : "All clear"}
+              </Text>
+
+              <Text style={styles.attentionText}>
+                {hasAttention
+                  ? `${dashboard.review_count} need review · ${dashboard.failed_count} failed to sync`
+                  : "No local scans currently need review or retry."}
+              </Text>
+            </View>
+
+            <AppIcon name="next" size={22} color={theme.colors.textMuted} />
           </Pressable>
         </View>
 
-        {dashboard.latest_batch ? (
+        {/*
+         * ----------------------------------------------------------------------
+         * Continue Working
+         * ----------------------------------------------------------------------
+         */}
+        {dashboard.latest_batch || dashboard.upcoming_test ? (
           <View style={styles.section}>
-            <SectionTitle title="Recent Batch" />
-            <RecentBatchCard batch={dashboard.latest_batch} />
+            <SectionTitle title="Continue Working" />
+
+            {dashboard.latest_batch ? (
+              <RecentBatchCard batch={dashboard.latest_batch} />
+            ) : null}
+
+            {dashboard.upcoming_test ? (
+              <UpcomingTestCard test={dashboard.upcoming_test} />
+            ) : null}
           </View>
         ) : null}
 
-        {dashboard.upcoming_test ? (
-          <View style={styles.section}>
-            <SectionTitle title="Upcoming Test" />
-            <UpcomingTestCard test={dashboard.upcoming_test} />
-          </View>
-        ) : null}
-
+        {/*
+         * ----------------------------------------------------------------------
+         * Offline Data
+         * ----------------------------------------------------------------------
+         */}
         <View style={styles.section}>
           <SectionTitle title="Offline Data" />
 
-          <View style={styles.offlineCard}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Open Settings synchronization"
+            onPress={() => router.push("/settings")}
+            style={({ pressed }) => [
+              styles.offlineCard,
+              pressed && styles.pressed,
+            ]}
+          >
             <View style={styles.offlineTopRow}>
               <View style={styles.offlineStatus}>
-                <View style={styles.offlineDot} />
-                <Text style={styles.offlineTitle}>
-                  Available on this device
-                </Text>
+                <View style={styles.offlineIcon}>
+                  <AppIcon
+                    name="offline"
+                    size={21}
+                    color={theme.colors.success}
+                  />
+                </View>
+
+                <View style={styles.offlineMain}>
+                  <Text style={styles.offlineTitle}>
+                    Available on this device
+                  </Text>
+
+                  <Text style={styles.offlineText}>
+                    Courses, tests, rosters, OMR packages, and scan data remain
+                    available offline.
+                  </Text>
+                </View>
               </View>
 
-              <Text style={styles.offlineBadge}>Offline ready</Text>
+              <View style={styles.offlineRight}>
+                <Text style={styles.offlineBadge}>Offline Ready</Text>
+
+                <AppIcon name="next" size={20} color={theme.colors.textMuted} />
+              </View>
             </View>
 
-            <Text style={styles.offlineText}>
-              GradeLens uses your saved courses, tests, rosters, OMR packages,
-              and scan queue even when the server is unavailable.
-            </Text>
+            <View style={styles.offlineDivider} />
 
-            <Text style={styles.offlineUpdated}>
-              {dashboard.last_successful_sync_at
-                ? `Last successful data update: ${formatDateTime(
-                    dashboard.last_successful_sync_at,
-                  )}`
-                : "No successful server update is recorded yet."}
-            </Text>
-          </View>
+            <View style={styles.offlineUpdateRow}>
+              <AppIcon name="sync" size={16} color={theme.colors.textMuted} />
+
+              <Text style={styles.offlineUpdated}>
+                {dashboard.last_successful_sync_at
+                  ? `Last update ${formatDateTime(
+                      dashboard.last_successful_sync_at,
+                    )}`
+                  : "No successful server update is recorded yet."}
+              </Text>
+            </View>
+          </Pressable>
         </View>
-      </View>
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 }
 
@@ -249,29 +331,50 @@ function SectionTitle({ title }: { title: string }) {
 }
 
 function MetricCard({
+  icon,
   value,
   label,
   tone = "default",
   onPress,
 }: {
+  icon: "courses" | "review" | "batch" | "error";
   value: number;
   label: string;
-  tone?: "default" | "danger";
+  tone?: "default" | "warning" | "danger";
   onPress?: () => void;
 }) {
+  const iconColor =
+    tone === "danger"
+      ? theme.colors.danger
+      : tone === "warning"
+        ? theme.colors.warning
+        : theme.colors.primary;
+
   return (
     <Pressable
       disabled={!onPress}
       onPress={onPress}
       style={({ pressed }) => [
         styles.metricCard,
+        tone === "warning" && styles.metricCardWarning,
         tone === "danger" && styles.metricCardDanger,
         pressed && onPress && styles.pressed,
       ]}
     >
+      <View
+        style={[
+          styles.metricIcon,
+          tone === "warning" && styles.metricIconWarning,
+          tone === "danger" && styles.metricIconDanger,
+        ]}
+      >
+        <AppIcon name={icon} size={19} color={iconColor} />
+      </View>
+
       <Text
         style={[
           styles.metricValue,
+          tone === "warning" && styles.metricValueWarning,
           tone === "danger" && styles.metricValueDanger,
         ]}
       >
@@ -284,11 +387,14 @@ function MetricCard({
 }
 
 function RecentBatchCard({ batch }: { batch: HomeRecentBatch }) {
-  const status = getBatchStatusLabel(batch.status);
+  const status = getBatchStatusPresentation(batch.status);
+
   const waiting = batch.ready_count + batch.review_count + batch.failed_count;
 
   return (
     <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`Open Batch ${batch.batch_number}`}
       onPress={() =>
         router.push({
           pathname: "/batch/[scanBatchUuid]",
@@ -299,29 +405,60 @@ function RecentBatchCard({ batch }: { batch: HomeRecentBatch }) {
       }
       style={({ pressed }) => [styles.featureCard, pressed && styles.pressed]}
     >
-      <View style={styles.featureTopRow}>
-        <View style={styles.featureTitleGroup}>
-          <Text style={styles.featureTitle}>Batch #{batch.batch_number}</Text>
-          <Text style={styles.featureSubtitle} numberOfLines={1}>
-            {batch.course_code ?? "Course"}
-            {batch.course_test_title ? ` · ${batch.course_test_title}` : ""}
-          </Text>
-        </View>
-
-        <View style={styles.featureRight}>
-          <Text style={styles.featureBadge}>{status}</Text>
-          <Text style={styles.chevron}>›</Text>
-        </View>
+      <View style={[styles.featureIcon, styles.featureIconBatch]}>
+        <AppIcon name="batch" size={23} color={theme.colors.primary} />
       </View>
 
-      <Text style={styles.featureMeta}>
-        {batch.submission_count} scans · {waiting} waiting ·{" "}
-        {batch.review_count} review · {batch.synced_count} synced
-      </Text>
+      <View style={styles.featureMain}>
+        <View style={styles.featureTopRow}>
+          <View style={styles.featureTitleGroup}>
+            <Text style={styles.featureEyebrow}>RECENT BATCH</Text>
 
-      <Text style={styles.featureFooter}>
-        {formatDateTime(batch.created_at)}
-      </Text>
+            <Text style={styles.featureTitle} numberOfLines={1}>
+              Batch #{batch.batch_number}
+            </Text>
+          </View>
+
+          <View
+            style={[
+              styles.featureBadge,
+              status.tone === "success" && styles.featureBadgeSuccess,
+              status.tone === "warning" && styles.featureBadgeWarning,
+              status.tone === "danger" && styles.featureBadgeDanger,
+              status.tone === "primary" && styles.featureBadgePrimary,
+            ]}
+          >
+            <Text
+              style={[
+                styles.featureBadgeText,
+                status.tone === "success" && styles.featureBadgeTextSuccess,
+                status.tone === "warning" && styles.featureBadgeTextWarning,
+                status.tone === "danger" && styles.featureBadgeTextDanger,
+                status.tone === "primary" && styles.featureBadgeTextPrimary,
+              ]}
+            >
+              {status.label}
+            </Text>
+          </View>
+        </View>
+
+        <Text style={styles.featureSubtitle} numberOfLines={1}>
+          {batch.course_code ?? "Course"}
+          {batch.course_test_title ? ` · ${batch.course_test_title}` : ""}
+        </Text>
+
+        <Text style={styles.featureMeta}>
+          {batch.submission_count} scan
+          {batch.submission_count === 1 ? "" : "s"} · {waiting} waiting ·{" "}
+          {batch.review_count} review · {batch.synced_count} synced
+        </Text>
+
+        <Text style={styles.featureFooter}>
+          {formatDateTime(batch.created_at)}
+        </Text>
+      </View>
+
+      <AppIcon name="next" size={22} color={theme.colors.textMuted} />
     </Pressable>
   );
 }
@@ -329,6 +466,8 @@ function RecentBatchCard({ batch }: { batch: HomeRecentBatch }) {
 function UpcomingTestCard({ test }: { test: HomeUpcomingTest }) {
   return (
     <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`Open ${test.title ?? "upcoming test"}`}
       onPress={() =>
         router.push({
           pathname: "/course-tests/[courseTestId]",
@@ -340,41 +479,74 @@ function UpcomingTestCard({ test }: { test: HomeUpcomingTest }) {
       }
       style={({ pressed }) => [styles.featureCard, pressed && styles.pressed]}
     >
-      <View style={styles.featureTopRow}>
-        <View style={styles.featureTitleGroup}>
-          <Text style={styles.courseCode}>{test.course_code ?? "Course"}</Text>
-          <Text style={styles.featureTitle}>
-            {test.title ?? "Untitled Test"}
-          </Text>
-        </View>
-
-        <Text style={styles.chevron}>›</Text>
+      <View style={[styles.featureIcon, styles.featureIconUpcoming]}>
+        <AppIcon name="time" size={23} color={theme.colors.info} />
       </View>
 
-      <Text style={styles.featureMeta}>
-        Deadline: {formatDateTime(test.deadline)}
-      </Text>
+      <View style={styles.featureMain}>
+        <Text style={styles.featureEyebrow}>UPCOMING TEST</Text>
 
-      <Text style={styles.featureFooter}>
-        {test.question_count !== null
-          ? `${test.question_count} OMR items available offline`
-          : "Question count not synced yet"}
-      </Text>
+        <Text style={styles.featureTitle} numberOfLines={1}>
+          {test.title ?? "Untitled Test"}
+        </Text>
+
+        <Text style={styles.featureSubtitle} numberOfLines={1}>
+          {test.course_code ?? "Course"}
+        </Text>
+
+        <Text style={styles.featureMeta}>
+          Deadline {formatDateTime(test.deadline)}
+        </Text>
+
+        <Text style={styles.featureFooter}>
+          {test.question_count !== null
+            ? `${test.question_count} OMR items available offline`
+            : "Question count not synced yet"}
+        </Text>
+      </View>
+
+      <AppIcon name="next" size={22} color={theme.colors.textMuted} />
     </Pressable>
   );
 }
 
-function getBatchStatusLabel(status: HomeRecentBatch["status"]): string {
+type BatchStatusTone = "neutral" | "success" | "warning" | "danger" | "primary";
+
+function getBatchStatusPresentation(status: HomeRecentBatch["status"]): {
+  label: string;
+  tone: BatchStatusTone;
+} {
   switch (status) {
     case "submitting":
-      return "Submitting";
+      return {
+        label: "Submitting",
+        tone: "primary",
+      };
+
     case "submitted":
-      return "Submitted";
+      return {
+        label: "Complete",
+        tone: "success",
+      };
+
+    case "completed_with_issues":
+      return {
+        label: "Issues",
+        tone: "danger",
+      };
+
     case "needs_attention":
-      return "Needs Attention";
+      return {
+        label: "Attention",
+        tone: "warning",
+      };
+
     case "draft":
     default:
-      return "Open";
+      return {
+        label: "Open",
+        tone: "neutral",
+      };
   }
 }
 
@@ -400,24 +572,55 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.background,
   },
 
-  content: {
-    paddingBottom: theme.spacing.xxxl,
+  scrollView: {
+    flex: 1,
   },
 
-  body: {
-    paddingHorizontal: theme.spacing.screenHorizontal,
+  content: {
+    width: "100%",
+    maxWidth: 720,
+    alignSelf: "center",
+
+    paddingTop: theme.spacing.xl,
+    paddingBottom: theme.spacing.xxxl,
   },
 
   center: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
+
     backgroundColor: theme.colors.background,
   },
 
   loadingText: {
     marginTop: theme.spacing.md,
+
     ...theme.typography.body,
+
+    color: theme.colors.textSecondary,
+  },
+
+  /*
+   * ------------------------------------------------------------------------
+   * Welcome
+   * ------------------------------------------------------------------------
+   */
+  welcomeBlock: {
+    marginBottom: theme.spacing.xxl,
+  },
+
+  welcomeTitle: {
+    ...theme.typography.screenTitle,
+
+    color: theme.colors.text,
+  },
+
+  welcomeSubtitle: {
+    marginTop: theme.spacing.xs,
+
+    ...theme.typography.body,
+
     color: theme.colors.textSecondary,
   },
 
@@ -427,35 +630,82 @@ const styles = StyleSheet.create({
 
   sectionTitle: {
     marginBottom: theme.spacing.sm,
+
     ...theme.typography.sectionTitle,
-    color: theme.colors.textSecondary,
+
+    color: theme.colors.text,
   },
 
+  /*
+   * ------------------------------------------------------------------------
+   * Overview
+   * ------------------------------------------------------------------------
+   */
   metricsRow: {
     flexDirection: "row",
+
     gap: theme.spacing.sm,
   },
 
   metricCard: {
     flex: 1,
-    minHeight: 92,
+    minHeight: 104,
+
     justifyContent: "center",
-    padding: theme.spacing.cardPadding,
+
+    padding: theme.spacing.md,
+
     borderWidth: 1,
     borderColor: theme.colors.border,
     borderRadius: theme.radius.lg,
+
     backgroundColor: theme.colors.surface,
+
     ...theme.shadows.card,
   },
 
+  metricCardWarning: {
+    borderColor: "#F2D57C",
+
+    backgroundColor: theme.colors.warningSoft,
+  },
+
   metricCardDanger: {
-    borderColor: theme.colors.dangerSoft,
+    borderColor: "#F6B8BC",
+
+    backgroundColor: theme.colors.dangerSoft,
+  },
+
+  metricIcon: {
+    width: 34,
+    height: 34,
+
+    alignItems: "center",
+    justifyContent: "center",
+
+    marginBottom: theme.spacing.sm,
+
+    borderRadius: 17,
+
+    backgroundColor: theme.colors.primarySoft,
+  },
+
+  metricIconWarning: {
+    backgroundColor: theme.colors.warningSoft,
+  },
+
+  metricIconDanger: {
     backgroundColor: theme.colors.dangerSoft,
   },
 
   metricValue: {
     ...theme.typography.metric,
+
     color: theme.colors.text,
+  },
+
+  metricValueWarning: {
+    color: theme.colors.warning,
   },
 
   metricValueDanger: {
@@ -463,187 +713,352 @@ const styles = StyleSheet.create({
   },
 
   metricLabel: {
-    marginTop: theme.spacing.xs,
+    marginTop: 2,
+
     ...theme.typography.caption,
+
     color: theme.colors.textMuted,
   },
 
+  /*
+   * ------------------------------------------------------------------------
+   * Needs attention
+   * ------------------------------------------------------------------------
+   */
   attentionCard: {
-    minHeight: 84,
+    minHeight: 78,
+
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
+
     gap: theme.spacing.md,
-    padding: theme.spacing.cardPadding,
+
+    paddingHorizontal: theme.spacing.lg,
+    paddingVertical: theme.spacing.md,
+
     borderWidth: 1,
-    borderColor: theme.colors.border,
     borderRadius: theme.radius.lg,
+
     backgroundColor: theme.colors.surface,
+
     ...theme.shadows.card,
   },
 
   attentionCardActive: {
-    borderColor: theme.colors.warningSoft,
+    borderColor: "#F2D57C",
+
     backgroundColor: theme.colors.warningSoft,
   },
 
-  attentionMain: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "flex-start",
+  attentionCardClear: {
+    borderColor: "#CFEBD5",
+
+    backgroundColor: "#EAF7EC",
   },
 
-  statusDot: {
-    width: 9,
-    height: 9,
-    marginTop: 5,
-    borderRadius: theme.radius.pill,
+  attentionIcon: {
+    width: 42,
+    height: 42,
+
+    flexShrink: 0,
+
+    alignItems: "center",
+    justifyContent: "center",
+
+    borderRadius: 21,
+  },
+
+  attentionIconWarning: {
+    backgroundColor: theme.colors.surface,
+  },
+
+  attentionIconSuccess: {
+    backgroundColor: theme.colors.surface,
   },
 
   attentionContent: {
     flex: 1,
-    marginLeft: theme.spacing.md,
+    minWidth: 0,
   },
 
   attentionTitle: {
     ...theme.typography.bodyStrong,
+
     color: theme.colors.text,
   },
 
   attentionText: {
-    marginTop: theme.spacing.xs,
-    ...theme.typography.body,
+    marginTop: 2,
+
+    ...theme.typography.caption,
+
     color: theme.colors.textSecondary,
   },
 
+  /*
+   * ------------------------------------------------------------------------
+   * Recent / Upcoming
+   * ------------------------------------------------------------------------
+   */
   featureCard: {
-    padding: theme.spacing.cardPadding,
+    flexDirection: "row",
+    alignItems: "center",
+
+    gap: theme.spacing.md,
+
+    padding: theme.spacing.lg,
+
+    marginBottom: theme.spacing.sm,
+
     borderWidth: 1,
     borderColor: theme.colors.border,
     borderRadius: theme.radius.lg,
+
     backgroundColor: theme.colors.surface,
+
     ...theme.shadows.card,
+  },
+
+  featureIcon: {
+    width: 46,
+    height: 46,
+
+    flexShrink: 0,
+
+    alignItems: "center",
+    justifyContent: "center",
+
+    borderRadius: 23,
+  },
+
+  featureIconBatch: {
+    backgroundColor: theme.colors.primarySoft,
+  },
+
+  featureIconUpcoming: {
+    backgroundColor: theme.colors.infoSoft,
+  },
+
+  featureMain: {
+    flex: 1,
+    minWidth: 0,
   },
 
   featureTopRow: {
     flexDirection: "row",
     alignItems: "flex-start",
     justifyContent: "space-between",
-    gap: theme.spacing.md,
+
+    gap: theme.spacing.sm,
   },
 
   featureTitleGroup: {
     flex: 1,
+    minWidth: 0,
+  },
+
+  featureEyebrow: {
+    ...theme.typography.label,
+
+    color: theme.colors.textMuted,
   },
 
   featureTitle: {
+    marginTop: 1,
+
     ...theme.typography.cardTitle,
+
     color: theme.colors.text,
   },
 
   featureSubtitle: {
-    marginTop: theme.spacing.xs,
+    marginTop: 2,
+
     ...theme.typography.caption,
+
     color: theme.colors.textSecondary,
   },
 
-  featureRight: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing.sm,
-  },
-
-  featureBadge: {
-    paddingHorizontal: theme.spacing.sm,
-    paddingVertical: 5,
-    borderRadius: theme.radius.pill,
-    backgroundColor: theme.colors.surfaceMuted,
-    ...theme.typography.label,
-    color: theme.colors.textMuted,
-  },
-
   featureMeta: {
-    marginTop: theme.spacing.lg,
-    ...theme.typography.body,
+    marginTop: theme.spacing.sm,
+
+    ...theme.typography.caption,
+
     color: theme.colors.textSecondary,
   },
 
   featureFooter: {
-    marginTop: theme.spacing.sm,
+    marginTop: 3,
+
     ...theme.typography.caption,
+
     color: theme.colors.textMuted,
   },
 
-  courseCode: {
-    marginBottom: theme.spacing.xs,
-    ...theme.typography.label,
+  featureBadge: {
+    flexShrink: 0,
+
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 4,
+
+    borderRadius: theme.radius.pill,
+
+    backgroundColor: theme.colors.surfaceMuted,
+  },
+
+  featureBadgeSuccess: {
+    backgroundColor: "#EAF7EC",
+  },
+
+  featureBadgeWarning: {
+    backgroundColor: theme.colors.warningSoft,
+  },
+
+  featureBadgeDanger: {
+    backgroundColor: theme.colors.dangerSoft,
+  },
+
+  featureBadgePrimary: {
+    backgroundColor: theme.colors.primarySoft,
+  },
+
+  featureBadgeText: {
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: "700",
+
+    color: theme.colors.textMuted,
+  },
+
+  featureBadgeTextSuccess: {
+    color: "#2E7D32",
+  },
+
+  featureBadgeTextWarning: {
+    color: theme.colors.warning,
+  },
+
+  featureBadgeTextDanger: {
+    color: theme.colors.danger,
+  },
+
+  featureBadgeTextPrimary: {
     color: theme.colors.primary,
   },
 
-  chevron: {
-    marginTop: -3,
-    fontSize: 28,
-    lineHeight: 28,
-    color: theme.colors.textMuted,
-  },
-
+  /*
+   * ------------------------------------------------------------------------
+   * Offline data
+   * ------------------------------------------------------------------------
+   */
   offlineCard: {
-    padding: theme.spacing.cardPadding,
+    padding: theme.spacing.lg,
+
     borderWidth: 1,
-    borderColor: theme.colors.border,
+    borderColor: "#CFEBD5",
     borderRadius: theme.radius.lg,
+
     backgroundColor: theme.colors.surface,
+
     ...theme.shadows.card,
   },
 
   offlineTopRow: {
     flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
+    alignItems: "flex-start",
+
     gap: theme.spacing.md,
   },
 
   offlineStatus: {
     flex: 1,
+
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
+
+    gap: theme.spacing.md,
   },
 
-  offlineDot: {
-    width: 9,
-    height: 9,
-    marginRight: theme.spacing.sm,
-    borderRadius: theme.radius.pill,
-    backgroundColor: theme.colors.success,
+  offlineIcon: {
+    width: 40,
+    height: 40,
+
+    flexShrink: 0,
+
+    alignItems: "center",
+    justifyContent: "center",
+
+    borderRadius: 20,
+
+    backgroundColor: "#EAF7EC",
+  },
+
+  offlineMain: {
+    flex: 1,
+    minWidth: 0,
   },
 
   offlineTitle: {
     ...theme.typography.bodyStrong,
+
     color: theme.colors.text,
+  },
+
+  offlineText: {
+    marginTop: 2,
+
+    ...theme.typography.caption,
+
+    color: theme.colors.textSecondary,
+  },
+
+  offlineRight: {
+    flexShrink: 0,
+
+    alignItems: "flex-end",
+
+    gap: theme.spacing.sm,
   },
 
   offlineBadge: {
     paddingHorizontal: theme.spacing.sm,
-    paddingVertical: 5,
+    paddingVertical: 4,
+
     borderRadius: theme.radius.pill,
-    backgroundColor: theme.colors.successSoft,
-    ...theme.typography.label,
-    color: theme.colors.success,
+
+    backgroundColor: "#EAF7EC",
+
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: "700",
+
+    color: "#2E7D32",
   },
 
-  offlineText: {
-    marginTop: theme.spacing.md,
-    ...theme.typography.body,
-    color: theme.colors.textSecondary,
+  offlineDivider: {
+    height: StyleSheet.hairlineWidth,
+
+    marginVertical: theme.spacing.md,
+
+    backgroundColor: theme.colors.divider,
+  },
+
+  offlineUpdateRow: {
+    flexDirection: "row",
+    alignItems: "center",
+
+    gap: theme.spacing.sm,
   },
 
   offlineUpdated: {
-    marginTop: theme.spacing.md,
+    flex: 1,
+
     ...theme.typography.caption,
+
     color: theme.colors.textMuted,
   },
 
   pressed: {
-    opacity: 0.78,
+    opacity: 0.76,
   },
 });
