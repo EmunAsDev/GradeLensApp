@@ -1,0 +1,197 @@
+name: Build unsigned iOS device app
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-ios-device:
+    name: iPhoneOS unsigned build
+    runs-on: macos-15
+    timeout-minutes: 60
+
+    env:
+      CI: "1"
+      EXPO_NO_TELEMETRY: "1"
+
+    steps:
+      - name: Checkout GradeLens
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install JavaScript dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -f package-lock.json ]]; then
+            npm ci
+          elif [[ -f yarn.lock ]]; then
+            corepack enable
+            yarn install --immutable
+          elif [[ -f pnpm-lock.yaml ]]; then
+            corepack enable
+            pnpm install --frozen-lockfile
+          else
+            npm install
+          fi
+
+      - name: Show Expo configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx expo config --type public
+
+      - name: Generate iOS native project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Generates the iOS native project in CI.
+          # No Apple login or signing credentials are used.
+          #
+          # If you intentionally commit a hand-edited ios/ folder,
+          # remove --clean so CI does not regenerate it.
+          npx expo prebuild --platform ios --clean
+
+      - name: Detect Xcode workspace and scheme
+        id: xcode
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          WORKSPACE="$(find ios -maxdepth 1 -name '*.xcworkspace' -print -quit)"
+
+          if [[ -z "${WORKSPACE}" ]]; then
+            echo "No .xcworkspace was generated under ios/."
+            exit 1
+          fi
+
+          echo "workspace=${WORKSPACE}" >> "$GITHUB_OUTPUT"
+
+          xcodebuild             -workspace "${WORKSPACE}"             -list             -json > /tmp/gradelens-xcode-list.json
+
+          SCHEME="$(
+            python3 - <<'PY'
+              import json
+
+              with open("/tmp/gradelens-xcode-list.json", "r", encoding="utf-8") as f:
+                  data = json.load(f)
+
+              schemes = data.get("workspace", {}).get("schemes", [])
+              schemes = [s for s in schemes if not s.lower().startswith("pods")]
+
+              if not schemes:
+                  raise SystemExit("No application Xcode scheme was found.")
+
+              print(schemes[0])
+            PY
+          )"
+
+          echo "scheme=${SCHEME}" >> "$GITHUB_OUTPUT"
+
+          echo "Workspace: ${WORKSPACE}"
+          echo "Scheme: ${SCHEME}"
+
+      - name: Build unsigned app for physical iPhone
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build
+
+          echo "Building for iphoneos / generic physical iOS device."
+          echo "Code signing is intentionally disabled."
+
+          set -o pipefail
+          xcodebuild             -workspace "${{ steps.xcode.outputs.workspace }}"             -scheme "${{ steps.xcode.outputs.scheme }}"             -configuration Debug             -sdk iphoneos             -destination "generic/platform=iOS"             -derivedDataPath "$PWD/build/DerivedData"             CODE_SIGNING_ALLOWED=NO             CODE_SIGNING_REQUIRED=NO             CODE_SIGN_IDENTITY=""             DEVELOPMENT_TEAM=""             ONLY_ACTIVE_ARCH=NO             build             | tee build/xcodebuild.log
+
+      - name: Locate and validate device app
+        id: app
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APP_PATH="$(
+            find build/DerivedData/Build/Products               -type d               -path '*Debug-iphoneos/*.app'               -print               -quit
+          )"
+
+          if [[ -z "${APP_PATH}" ]]; then
+            echo "No Debug-iphoneos .app product was found."
+            find build/DerivedData/Build/Products -maxdepth 4 -print || true
+            exit 1
+          fi
+
+          EXECUTABLE="$(
+            /usr/libexec/PlistBuddy               -c 'Print :CFBundleExecutable'               "${APP_PATH}/Info.plist"
+          )"
+
+          BUNDLE_ID="$(
+            /usr/libexec/PlistBuddy               -c 'Print :CFBundleIdentifier'               "${APP_PATH}/Info.plist"
+          )"
+
+          echo "app_path=${APP_PATH}" >> "$GITHUB_OUTPUT"
+          echo "executable=${EXECUTABLE}" >> "$GITHUB_OUTPUT"
+          echo "bundle_id=${BUNDLE_ID}" >> "$GITHUB_OUTPUT"
+
+          echo "App: ${APP_PATH}"
+          echo "Bundle identifier: ${BUNDLE_ID}"
+          echo "Executable: ${EXECUTABLE}"
+
+          echo
+          echo "Binary architectures:"
+          lipo -info "${APP_PATH}/${EXECUTABLE}"
+
+          if ! lipo -info "${APP_PATH}/${EXECUTABLE}" | grep -q "arm64"; then
+            echo "Expected an arm64 iPhoneOS binary, but arm64 was not found."
+            exit 1
+          fi
+
+          echo
+          echo "Signing check (unsigned is expected here):"
+          if codesign -dv "${APP_PATH}" 2>&1; then
+            echo "The app unexpectedly contains a code signature."
+          else
+            echo "OK: app is not signed."
+          fi
+
+      - name: Package unsigned IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APP_PATH="${{ steps.app.outputs.app_path }}"
+
+          rm -rf build/package
+          mkdir -p build/package/Payload
+
+          ditto "${APP_PATH}"             "build/package/Payload/$(basename "${APP_PATH}")"
+
+          (
+            cd build/package
+            /usr/bin/zip -qry ../GradeLens-unsigned-device.ipa Payload
+          )
+
+          ditto -c -k --keepParent             "${APP_PATH}"             build/GradeLens-unsigned-device.app.zip
+
+          echo
+          echo "Created:"
+          ls -lh             build/GradeLens-unsigned-device.ipa             build/GradeLens-unsigned-device.app.zip
+
+      - name: Upload unsigned iOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradelens-ios-unsigned-device
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            build/GradeLens-unsigned-device.ipa
+            build/GradeLens-unsigned-device.app.zip
+            build/xcodebuild.log
