@@ -495,62 +495,19 @@ export default function ScanScreen() {
       try {
         studentIdResult =
           await GradeLensOmr.readStudentId50(normalizedImageUri);
-      } catch (error) {
-        console.error("[STUDENT ID] Native reader error:", error);
-
+      } catch {
         throw new ScanFlowError(
           "Student ID Reader Error",
-          "GradeLens could not run the Student ID reader on the normalized sheet. Check the Metro/native log for the actual reader error.",
+          "GradeLens could not run the Student ID reader on the normalized sheet. Please retake the sheet and try again.",
         );
       }
 
       /*
-       * Always log the recognition result, including successful scans.
-       * This gives us a clean comparison between accepted and rejected
-       * captures of the exact same physical answer sheet.
+       * Student ID recognition values are intentionally not written to the
+       * Metro/native console. The recognized ID is used only by the normal
+       * scan workflow: local roster verification, local submission storage,
+       * and the visible result screen.
        */
-      console.log(
-        "[STUDENT ID] Recognition result:",
-        JSON.stringify(
-          {
-            normalizedImageUri,
-
-            success: studentIdResult.success,
-
-            studentId: studentIdResult.studentId,
-
-            minConfidence: studentIdResult.minConfidence,
-
-            averageConfidence: studentIdResult.averageConfidence,
-
-            weakPositions: studentIdResult.weakPositions,
-
-            digits: studentIdResult.digits.map((digit) => ({
-              position: digit.position,
-
-              digit: digit.digit,
-
-              confidence: digit.confidence,
-
-              reliable: digit.reliable,
-
-              consensusCount: digit.consensusCount,
-
-              variantCount: digit.variantCount,
-
-              recognitionMethod: digit.recognitionMethod,
-
-              cropUri: digit.cropUri,
-
-              binaryUri: digit.binaryUri,
-
-              modelInputUri: digit.modelInputUri,
-            })),
-          },
-          null,
-          2,
-        ),
-      );
 
       if (!studentIdResult.success) {
         /*
@@ -575,11 +532,9 @@ export default function ScanScreen() {
             candidateExistsInRoster = candidateStudent !== null;
 
             candidateStudentName = candidateStudent?.name ?? null;
-          } catch (error) {
-            console.warn(
-              "[STUDENT ID] Candidate roster diagnostic failed:",
-              error,
-            );
+          } catch {
+            candidateExistsInRoster = false;
+            candidateStudentName = null;
           }
         }
 
@@ -604,20 +559,6 @@ export default function ScanScreen() {
             );
           })
           .join("\n");
-
-        console.warn("[STUDENT ID] Recognition rejected:", {
-          candidate: studentIdResult.studentId,
-
-          weakPositions: studentIdResult.weakPositions,
-
-          minConfidence: studentIdResult.minConfidence,
-
-          averageConfidence: studentIdResult.averageConfidence,
-
-          candidateExistsInRoster,
-
-          candidateStudentName,
-        });
 
         throw new ScanFlowError(
           "Student ID Diagnostic",
@@ -648,7 +589,7 @@ export default function ScanScreen() {
 
             "",
 
-            "The crop, binary, and 28x28 model-input paths are printed in the Metro/native console.",
+            "Student ID recognition values are not written to the Metro/native console.",
           ].join("\n"),
         );
       }

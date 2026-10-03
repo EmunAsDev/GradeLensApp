@@ -12,6 +12,7 @@ import {
 } from "react-native";
 
 import { router, useFocusEffect } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useAuth } from "@/auth/AuthContext";
 import {
@@ -22,7 +23,6 @@ import {
 } from "@/database/homeRepository";
 
 import { AppIcon } from "@/../components/icons/AppIcon";
-import { AppScreenHeader } from "@/../components/layout/AppScreenHeader";
 import { getScreenHorizontalPadding, theme } from "@/../theme";
 
 const EMPTY_DASHBOARD: HomeDashboardSummary = {
@@ -40,6 +40,7 @@ export default function HomeScreen() {
   const { employee } = useAuth();
 
   const { width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
 
   const horizontalPadding = getScreenHorizontalPadding(width);
 
@@ -114,8 +115,6 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.screen}>
-      <AppScreenHeader variant="brand" />
-
       <ScrollView
         style={styles.scrollView}
         showsVerticalScrollIndicator={false}
@@ -131,6 +130,8 @@ export default function HomeScreen() {
           styles.content,
           {
             paddingHorizontal: horizontalPadding,
+
+            paddingTop: insets.top + theme.spacing.xl,
           },
         ]}
       >
@@ -581,7 +582,6 @@ const styles = StyleSheet.create({
     maxWidth: 720,
     alignSelf: "center",
 
-    paddingTop: theme.spacing.xl,
     paddingBottom: theme.spacing.xxxl,
   },
 

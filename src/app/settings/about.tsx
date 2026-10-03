@@ -1,4 +1,11 @@
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import {
+  Image,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 
 import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -43,8 +50,14 @@ export default function AboutGradeLensScreen() {
         contentContainerStyle={styles.content}
       >
         <View style={styles.hero}>
-          <View style={styles.heroMark}>
-            <Text style={styles.heroMarkText}>GL</Text>
+          <View style={styles.heroLogoWrap}>
+            <Image
+              source={require("../../../assets/images/gradelenslogov2.png")}
+              style={styles.heroLogo}
+              resizeMode="contain"
+              accessible
+              accessibilityLabel="GradeLens logo"
+            />
           </View>
 
           <Text style={styles.heroTitle}>GradeLens</Text>
@@ -241,20 +254,16 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.primarySoft,
   },
 
-  heroMark: {
-    width: 72,
-    height: 72,
+  heroLogoWrap: {
+    width: 92,
+    height: 92,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: 22,
-    backgroundColor: theme.colors.primary,
   },
 
-  heroMarkText: {
-    fontSize: 24,
-    lineHeight: 30,
-    fontWeight: "800",
-    color: theme.colors.textInverse,
+  heroLogo: {
+    width: 84,
+    height: 84,
   },
 
   heroTitle: {
