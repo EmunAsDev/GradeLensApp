@@ -12,12 +12,12 @@
       "distribution": "internal"
     },
     "production": {
-      "autoIncrement": true
-    },
-    "ios-development": {
-      "extends": "development",
-      "ios": {
-        "simulator": true
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://gradelens.laravel.cloud/api"
+      },
+      "android": {
+        "buildType": "apk"
       }
     }
   },

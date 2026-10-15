@@ -4,7 +4,7 @@ import type {
   QuestionQualityStatus,
 } from "./index";
 
-export type OmrQuestionCount = 50 | 100;
+export type OmrQuestionCount = number;
 export type OmrSheetFormat = "50" | "100";
 
 const VALID_CHOICES = ["A", "B", "C", "D", "E"] as const;
@@ -274,54 +274,74 @@ function getLocalReview(submission: OmrSubmissionPayload): OmrLocalReview {
     : buildDefaultLocalReview(submission);
 }
 
-export function normalizeOmrQuestionCount(value: number): OmrQuestionCount {
-  if (value === 50 || value === 100) {
+export function normalizeOmrQuestionCount(
+  value: number,
+): OmrQuestionCount {
+  if (Number.isInteger(value) && value >= 1 && value <= 100) {
     return value;
   }
 
   throw new Error(
-    `Unsupported GradeLens paper size: ${value} questions. Expected 50 or 100.`,
+    `Unsupported GradeLens question count: ${value}. ` +
+      "Expected an integer from 1 to 100.",
   );
 }
 
 export function getOmrSheetFormat(
   questionCount: OmrQuestionCount,
 ): OmrSheetFormat {
-  return String(questionCount) as OmrSheetFormat;
+  const actualQuestionCount =
+    normalizeOmrQuestionCount(questionCount);
+
+  return actualQuestionCount <= 50 ? "50" : "100";
 }
+
 
 export function buildOmrSubmissionPayload(
   result: AnalyzeQuestionsResultLike,
   questionCount: OmrQuestionCount,
 ): OmrSubmissionPayload {
+  const actualQuestionCount =
+    normalizeOmrQuestionCount(questionCount);
+
+  const layoutQuestionCount: 50 | 100 =
+    actualQuestionCount <= 50 ? 50 : 100;
+
   if (!result.success) {
     throw new Error(
       "Cannot build an OMR submission from an unsuccessful analysis.",
     );
   }
 
-  if (result.questionCount !== questionCount) {
+  // The native analyzer reads the complete physical layout, not just
+  // the number of questions configured for this test.
+  if (result.questionCount !== layoutQuestionCount) {
     throw new Error(
-      `OMR analysis question-count mismatch. Expected ${questionCount}, received ${result.questionCount}.`,
+      `OMR layout mismatch. Expected ${layoutQuestionCount} positions ` +
+        `for a ${actualQuestionCount}-question test, received ` +
+        `${result.questionCount}.`,
     );
   }
 
-  if (result.questions.length !== questionCount) {
+  if (result.questions.length !== layoutQuestionCount) {
     throw new Error(
-      `Expected ${questionCount} interpreted questions, received ${result.questions.length}.`,
+      `Expected ${layoutQuestionCount} interpreted layout positions, ` +
+        `received ${result.questions.length}.`,
     );
   }
 
   const answers: Record<string, string[]> = {};
   const questions: OmrSubmissionQuestionPayload[] = [];
   const reviewQuestionNumbers: number[] = [];
+
   const seenQuestions = new Set<number>();
+  const seenActualQuestions = new Set<number>();
 
   for (const question of result.questions) {
     if (
       !Number.isInteger(question.question) ||
       question.question < 1 ||
-      question.question > questionCount
+      question.question > layoutQuestionCount
     ) {
       throw new Error(
         `Invalid interpreted question number: ${question.question}.`,
@@ -336,16 +356,26 @@ export function buildOmrSubmissionPayload(
 
     seenQuestions.add(question.question);
 
+    // Ignore unused physical positions completely. They must not enter
+    // the payload, review queue, counts, or tentative scoring.
+    if (question.question > actualQuestionCount) {
+      continue;
+    }
+
+    seenActualQuestions.add(question.question);
+
     const physicallySelected =
       question.status === "selected" ||
       question.status === "selected_with_correction";
 
     const selectedChoices = physicallySelected
-      ? [...question.selectedChoices]
+      ? normalizeChoices([...question.selectedChoices])
       : [];
 
     const legacySingleAnswer =
-      selectedChoices.length === 1 ? selectedChoices[0] : null;
+      selectedChoices.length === 1
+        ? selectedChoices[0]
+        : null;
 
     answers[String(question.question)] = [...selectedChoices];
 
@@ -356,9 +386,9 @@ export function buildOmrSubmissionPayload(
       status: question.status,
       quality_status: question.qualityStatus,
       needs_review: question.needsReview,
-      shaded_choices: [...question.shadedChoices],
-      crossed_choices: [...question.crossedChoices],
-      invalid_choices: [...question.invalidChoices],
+      shaded_choices: normalizeChoices([...question.shadedChoices]),
+      crossed_choices: normalizeChoices([...question.crossedChoices]),
+      invalid_choices: normalizeChoices([...question.invalidChoices]),
     });
 
     if (
@@ -370,31 +400,59 @@ export function buildOmrSubmissionPayload(
     }
   }
 
-  if (seenQuestions.size !== questionCount) {
+  // Check that every actual question exists, without requiring unused
+  // positions to be included in the submission.
+  if (seenActualQuestions.size !== actualQuestionCount) {
     throw new Error(
-      `Expected ${questionCount} unique interpreted questions, received ${seenQuestions.size}.`,
+      `Expected ${actualQuestionCount} actual questions, received ` +
+        `${seenActualQuestions.size}.`,
     );
   }
 
-  questions.sort((a, b) => a.question_number - b.question_number);
+  for (
+    let number = 1;
+    number <= actualQuestionCount;
+    number++
+  ) {
+    if (!seenActualQuestions.has(number)) {
+      throw new Error(
+        `Missing interpreted question number: ${number}.`,
+      );
+    }
+  }
 
-  const normalizedReviewQuestionNumbers = normalizeQuestionNumbers(
-    reviewQuestionNumbers,
+  questions.sort(
+    (a, b) => a.question_number - b.question_number,
   );
+
+  const normalizedReviewQuestionNumbers =
+    normalizeQuestionNumbers(reviewQuestionNumbers);
 
   const localReview: OmrLocalReview = {
     state:
-      normalizedReviewQuestionNumbers.length > 0 ? "pending" : "not_required",
-    original_review_question_numbers: [...normalizedReviewQuestionNumbers],
-    unresolved_question_numbers: [...normalizedReviewQuestionNumbers],
+      normalizedReviewQuestionNumbers.length > 0
+        ? "pending"
+        : "not_required",
+    original_review_question_numbers: [
+      ...normalizedReviewQuestionNumbers,
+    ],
+    unresolved_question_numbers: [
+      ...normalizedReviewQuestionNumbers,
+    ],
     resolved_question_numbers: [],
     resolutions: {},
   };
 
-  return {
-    format: getOmrSheetFormat(questionCount),
+  // Recalculate from actual questions only. The native aggregate counts
+  // include unused positions from the full physical sheet.
+  const countStatus = (
+    status: QuestionInterpretationStatus,
+  ) =>
+    questions.filter((question) => question.status === status).length;
 
-    question_count: questionCount,
+  return {
+    format: getOmrSheetFormat(actualQuestionCount),
+    question_count: actualQuestionCount,
 
     answers,
     questions,
@@ -402,36 +460,38 @@ export function buildOmrSubmissionPayload(
     review_question_numbers: normalizedReviewQuestionNumbers,
 
     counts: {
-      accepted: result.acceptedCount,
+      accepted: questions.filter(
+        (question) => question.quality_status === "accepted",
+      ).length,
 
-      review: result.reviewCount,
+      review: questions.filter(
+        (question) => question.quality_status === "review",
+      ).length,
 
-      reject: result.rejectCount,
+      reject: questions.filter(
+        (question) => question.quality_status === "reject",
+      ).length,
 
       statuses: {
-        blank: result.statusCounts.blank ?? 0,
-
-        selected: result.statusCounts.selected ?? 0,
-
-        selected_with_correction:
-          result.statusCounts.selected_with_correction ?? 0,
-
-        crossed_without_replacement:
-          result.statusCounts.crossed_without_replacement ?? 0,
-
-        multiple: result.statusCounts.multiple ?? 0,
-
-        invalid: result.statusCounts.invalid ?? 0,
-
-        ambiguous: result.statusCounts.ambiguous ?? 0,
-
-        unreadable: result.statusCounts.unreadable ?? 0,
+        blank: countStatus("blank"),
+        selected: countStatus("selected"),
+        selected_with_correction: countStatus(
+          "selected_with_correction",
+        ),
+        crossed_without_replacement: countStatus(
+          "crossed_without_replacement",
+        ),
+        multiple: countStatus("multiple"),
+        invalid: countStatus("invalid"),
+        ambiguous: countStatus("ambiguous"),
+        unreadable: countStatus("unreadable"),
       },
     },
 
     local_review: localReview,
   };
 }
+
 
 /*
  * Return the ORIGINAL native evidence for the questions that still need

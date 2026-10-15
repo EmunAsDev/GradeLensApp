@@ -680,6 +680,11 @@ export default function ScanScreen() {
         );
       }
 
+      // The physical answer sheet has a fixed 50- or 100-question layout.
+      // Keep native geometry/calibration on that layout size, while passing the
+      // actual question count to payload construction and scoring below.
+      const layoutQuestionCount = questionCount <= 50 ? 50 : 100;
+
       /*
 
        * ------------------------------------------------------------------------
@@ -702,7 +707,7 @@ export default function ScanScreen() {
         await GradeLensOmr.prepareYoloProposals(
           normalizedImageUri,
 
-          questionCount,
+          layoutQuestionCount,
         );
       } catch {
         throw new ScanFlowError(
@@ -726,7 +731,7 @@ export default function ScanScreen() {
 
       try {
         result =
-          questionCount === 50
+          layoutQuestionCount === 50
             ? await GradeLensOmr.analyze50Questions(normalizedImageUri)
             : await GradeLensOmr.analyze100Questions(normalizedImageUri);
       } catch {
@@ -782,7 +787,11 @@ export default function ScanScreen() {
 
         const invalidQuestionNumbers = result.questions
 
-          .filter((question) => question.status === "invalid")
+          .filter(
+            (question) =>
+              question.question <= questionCount &&
+              question.status === "invalid",
+          )
 
           .map((question) => question.question)
 
