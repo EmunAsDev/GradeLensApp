@@ -4,11 +4,11 @@
     "slug": "gradelens",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/gradelenslogov2.png",
+    "icon": "./assets/images/gradelensdisplaylogo.png",
     "scheme": "gradelens",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/images/gradelenslogov2.png",
+      "icon": "./assets/images/gradelensdisplaylogo.png",
       "bundleIdentifier": "com.gradelens.app",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
@@ -17,7 +17,7 @@
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#FFFFFF",
-        "foregroundImage": "./assets/images/gradelenslogov2.png"
+        "foregroundImage": "./assets/images/gradelensdisplaylogo.png"
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.um.gradelens",
