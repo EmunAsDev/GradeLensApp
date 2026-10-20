@@ -42,7 +42,9 @@ SplashScreen.setOptions({
 type DatabaseState = "loading" | "ready" | "error";
 
 function RootNavigator() {
-  const { isLoading: isAuthLoading } = useAuth();
+  const { isLoading: isAuthLoading, employee } = useAuth();
+
+  const employeeId = employee?.id ?? null;
 
   const { isLoading: isOnboardingLoading } = useOnboarding();
 
@@ -56,17 +58,30 @@ function RootNavigator() {
    * Initialize the local GradeLens SQLite database.
    */
   useEffect(() => {
+    // Do not open a faculty database until session restoration has finished.
+    if (isAuthLoading) {
+      return;
+    }
+
+    // Login/onboarding screens do not need a faculty database.
+    if (employeeId === null) {
+      setDatabaseState("ready");
+      return;
+    }
+
     let isActive = true;
+
+    setDatabaseState("loading");
 
     const initialize = async () => {
       try {
-        await initializeDatabase();
+        await initializeDatabase(employeeId);
 
         if (isActive) {
           setDatabaseState("ready");
         }
       } catch (error) {
-        console.error("Database initialization failed:", error);
+        console.error("Faculty database initialization failed:", error);
 
         if (isActive) {
           setDatabaseState("error");
@@ -79,7 +94,7 @@ function RootNavigator() {
     return () => {
       isActive = false;
     };
-  }, []);
+  }, [isAuthLoading, employeeId]);
 
   /*
    * Count the 2.5-second minimum only after the React splash is actually

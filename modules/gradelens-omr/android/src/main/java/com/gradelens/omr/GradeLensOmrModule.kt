@@ -2116,7 +2116,13 @@ class GradeLensOmrModule : Module() {
 
             AsyncFunction(
                 "readAnswerKey50"
-            ) { normalizedImageUri: String ->
+            ) { normalizedImageUri: String, actualQuestionCount: Int ->
+
+                if (actualQuestionCount !in 1..QUESTION_COUNT_50) {
+                    throw Exception(
+                        "50-item answer-key reader requires actualQuestionCount between 1 and 50."
+                    )
+                }
 
                 ensureOpenCvInitialized()
 
@@ -2183,7 +2189,7 @@ class GradeLensOmrModule : Module() {
 
                     for (
                         question in
-                        1..QUESTION_COUNT_50
+                        1..actualQuestionCount
                     ) {
 
                         val shadedChoices =
@@ -2333,7 +2339,7 @@ class GradeLensOmrModule : Module() {
                     val success =
                         invalidQuestionNumbers.isEmpty() &&
                             answers.size ==
-                                QUESTION_COUNT_50
+                                actualQuestionCount
 
                     mapOf(
                         "success" to
@@ -2383,7 +2389,13 @@ class GradeLensOmrModule : Module() {
 
             AsyncFunction(
                 "readAnswerKey100"
-            ) { normalizedImageUri: String ->
+            ) { normalizedImageUri: String, actualQuestionCount: Int ->
+
+                if (actualQuestionCount !in 51..QUESTION_COUNT_100) {
+                    throw Exception(
+                        "100-item answer-key reader requires actualQuestionCount between 51 and 100."
+                    )
+                }
 
                 ensureOpenCvInitialized()
 
@@ -2450,7 +2462,7 @@ class GradeLensOmrModule : Module() {
 
                     for (
                         question in
-                        1..QUESTION_COUNT_100
+                        1..actualQuestionCount
                     ) {
 
                         val shadedChoices =
@@ -2600,7 +2612,7 @@ class GradeLensOmrModule : Module() {
                     val success =
                         invalidQuestionNumbers.isEmpty() &&
                             answers.size ==
-                                QUESTION_COUNT_100
+                                actualQuestionCount
 
                     mapOf(
                         "success" to

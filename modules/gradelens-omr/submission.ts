@@ -274,9 +274,7 @@ function getLocalReview(submission: OmrSubmissionPayload): OmrLocalReview {
     : buildDefaultLocalReview(submission);
 }
 
-export function normalizeOmrQuestionCount(
-  value: number,
-): OmrQuestionCount {
+export function normalizeOmrQuestionCount(value: number): OmrQuestionCount {
   if (Number.isInteger(value) && value >= 1 && value <= 100) {
     return value;
   }
@@ -290,22 +288,18 @@ export function normalizeOmrQuestionCount(
 export function getOmrSheetFormat(
   questionCount: OmrQuestionCount,
 ): OmrSheetFormat {
-  const actualQuestionCount =
-    normalizeOmrQuestionCount(questionCount);
+  const actualQuestionCount = normalizeOmrQuestionCount(questionCount);
 
   return actualQuestionCount <= 50 ? "50" : "100";
 }
-
 
 export function buildOmrSubmissionPayload(
   result: AnalyzeQuestionsResultLike,
   questionCount: OmrQuestionCount,
 ): OmrSubmissionPayload {
-  const actualQuestionCount =
-    normalizeOmrQuestionCount(questionCount);
+  const actualQuestionCount = normalizeOmrQuestionCount(questionCount);
 
-  const layoutQuestionCount: 50 | 100 =
-    actualQuestionCount <= 50 ? 50 : 100;
+  const layoutQuestionCount: 50 | 100 = actualQuestionCount <= 50 ? 50 : 100;
 
   if (!result.success) {
     throw new Error(
@@ -373,9 +367,7 @@ export function buildOmrSubmissionPayload(
       : [];
 
     const legacySingleAnswer =
-      selectedChoices.length === 1
-        ? selectedChoices[0]
-        : null;
+      selectedChoices.length === 1 ? selectedChoices[0] : null;
 
     answers[String(question.question)] = [...selectedChoices];
 
@@ -409,45 +401,30 @@ export function buildOmrSubmissionPayload(
     );
   }
 
-  for (
-    let number = 1;
-    number <= actualQuestionCount;
-    number++
-  ) {
+  for (let number = 1; number <= actualQuestionCount; number++) {
     if (!seenActualQuestions.has(number)) {
-      throw new Error(
-        `Missing interpreted question number: ${number}.`,
-      );
+      throw new Error(`Missing interpreted question number: ${number}.`);
     }
   }
 
-  questions.sort(
-    (a, b) => a.question_number - b.question_number,
-  );
+  questions.sort((a, b) => a.question_number - b.question_number);
 
-  const normalizedReviewQuestionNumbers =
-    normalizeQuestionNumbers(reviewQuestionNumbers);
+  const normalizedReviewQuestionNumbers = normalizeQuestionNumbers(
+    reviewQuestionNumbers,
+  );
 
   const localReview: OmrLocalReview = {
     state:
-      normalizedReviewQuestionNumbers.length > 0
-        ? "pending"
-        : "not_required",
-    original_review_question_numbers: [
-      ...normalizedReviewQuestionNumbers,
-    ],
-    unresolved_question_numbers: [
-      ...normalizedReviewQuestionNumbers,
-    ],
+      normalizedReviewQuestionNumbers.length > 0 ? "pending" : "not_required",
+    original_review_question_numbers: [...normalizedReviewQuestionNumbers],
+    unresolved_question_numbers: [...normalizedReviewQuestionNumbers],
     resolved_question_numbers: [],
     resolutions: {},
   };
 
   // Recalculate from actual questions only. The native aggregate counts
   // include unused positions from the full physical sheet.
-  const countStatus = (
-    status: QuestionInterpretationStatus,
-  ) =>
+  const countStatus = (status: QuestionInterpretationStatus) =>
     questions.filter((question) => question.status === status).length;
 
   return {
@@ -475,12 +452,8 @@ export function buildOmrSubmissionPayload(
       statuses: {
         blank: countStatus("blank"),
         selected: countStatus("selected"),
-        selected_with_correction: countStatus(
-          "selected_with_correction",
-        ),
-        crossed_without_replacement: countStatus(
-          "crossed_without_replacement",
-        ),
+        selected_with_correction: countStatus("selected_with_correction"),
+        crossed_without_replacement: countStatus("crossed_without_replacement"),
         multiple: countStatus("multiple"),
         invalid: countStatus("invalid"),
         ambiguous: countStatus("ambiguous"),
@@ -491,7 +464,6 @@ export function buildOmrSubmissionPayload(
     local_review: localReview,
   };
 }
-
 
 /*
  * Return the ORIGINAL native evidence for the questions that still need

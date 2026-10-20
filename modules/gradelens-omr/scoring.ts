@@ -1,3 +1,5 @@
+import { getOmrSheetFormat, normalizeOmrQuestionCount } from "./submission";
+
 import type {
   OmrQuestionCount,
   OmrSubmissionPayload,
@@ -86,21 +88,15 @@ function buildReviewSet(reviewQuestionNumbers: number[]): Set<number> {
  *   therefore blocks synchronization.
  * - Missing answer key -> missing_key and is not scored.
  *
- * The same rules are used for both 50- and 100-item papers.
+ * Actual question counts may be 1–100; format records the physical 50/100 layout.
  */
 export function scoreOmrSubmission(
   submission: OmrSubmissionPayload,
   answerKey: AnswerKey,
 ): TentativeScoreResult {
-  const questionCount = submission.question_count;
+  const questionCount = normalizeOmrQuestionCount(submission.question_count);
 
-  if (questionCount !== 50 && questionCount !== 100) {
-    throw new Error(
-      `Unsupported OMR submission size: ${questionCount}. Expected 50 or 100.`,
-    );
-  }
-
-  if (submission.format !== String(questionCount)) {
+  if (submission.format !== getOmrSheetFormat(questionCount)) {
     throw new Error(
       `OMR format mismatch. format=${submission.format}, question_count=${questionCount}.`,
     );

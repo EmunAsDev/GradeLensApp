@@ -19,6 +19,8 @@ import {
 
 import { performFullSync } from "@/sync/fullSync";
 
+import { closeDatabase, initializeDatabase } from "../database/database";
+
 type LoginResponse = {
   message: string;
   token: string;
@@ -58,10 +60,19 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [isLoading, setIsLoading] = useState(true);
 
   const clearLocalAuth = useCallback(async () => {
+    try {
+      // Close the connection, but keep this employee's database file.
+      await closeDatabase();
+    } catch (error) {
+      console.error(
+        "[AUTH] Could not close the active faculty database:",
+        error,
+      );
+    }
+
     await clearAuthSession();
 
     setToken(null);
-
     setEmployee(null);
   }, []);
 
@@ -167,6 +178,17 @@ export function AuthProvider({ children }: AuthProviderProps) {
      * the valid login itself must not be discarded.
      */
     await saveAuthSession(response.token, response.employee);
+
+    /*
+     * Select the correct account database BEFORE full sync uses any
+     * local repositories or saves OMR package metadata.
+     */
+    try {
+      await initializeDatabase(response.employee.id);
+    } catch (error) {
+      await clearAuthSession();
+      throw error;
+    }
 
     /*
      * Explicit Login Full Sync

@@ -1,59 +1,78 @@
 import { Directory, File, Paths } from "expo-file-system";
 
-function getOmrDirectory(): Directory {
-  return new Directory(Paths.document, "omr", "packages");
-}
+import { getActiveDatabaseEmployeeId } from "../database/database";
 
-function getOmrPackageFile(courseTestId: number): File {
-  const directory = getOmrDirectory();
+function requireActiveEmployeeId(): number {
+  const employeeId = getActiveDatabaseEmployeeId();
 
-  return new File(directory, `${courseTestId}.omr`);
-}
-
-async function ensureOmrDirectory(): Promise<void> {
-  const directory = getOmrDirectory();
-
-  if (directory.exists) {
-    return;
+  if (
+    employeeId === null ||
+    !Number.isSafeInteger(employeeId) ||
+    employeeId <= 0
+  ) {
+    throw new Error(
+      "Cannot access OMR package storage without an active faculty database.",
+    );
   }
 
-  directory.create({
-    intermediates: true,
-    idempotent: true,
-  });
+  return employeeId;
+}
+
+function getOmrDirectory(employeeId: number): Directory {
+  return new Directory(
+    Paths.document,
+    "omr",
+    `employee-${employeeId}`,
+    "packages",
+  );
+}
+
+function getOmrPackageFile(employeeId: number, courseTestId: number): File {
+  return new File(getOmrDirectory(employeeId), `${courseTestId}.omr`);
+}
+
+async function ensureOmrDirectory(employeeId: number): Promise<void> {
+  const directory = getOmrDirectory(employeeId);
+
+  if (!directory.exists) {
+    directory.create({
+      intermediates: true,
+      idempotent: true,
+    });
+  }
 }
 
 export function getOmrPackagePath(courseTestId: number): string {
-  return getOmrPackageFile(courseTestId).uri;
+  if (!Number.isSafeInteger(courseTestId) || courseTestId <= 0) {
+    throw new Error("A valid course test ID is required.");
+  }
+
+  const employeeId = requireActiveEmployeeId();
+
+  return getOmrPackageFile(employeeId, courseTestId).uri;
 }
 
 export async function saveEncryptedOmrPackage(
   courseTestId: number,
   encryptedBase64: string,
 ): Promise<string> {
-  await ensureOmrDirectory();
+  if (!Number.isSafeInteger(courseTestId) || courseTestId <= 0) {
+    throw new Error("A valid course test ID is required.");
+  }
 
-  const file = getOmrPackageFile(courseTestId);
+  // Capture the owner before awaiting any filesystem operation.
+  const employeeId = requireActiveEmployeeId();
 
-  /*
-    |--------------------------------------------------------------------------
-    | Convert Base64 Ciphertext To Binary
-    |--------------------------------------------------------------------------
-    */
+  await ensureOmrDirectory(employeeId);
+
+  const file = getOmrPackageFile(employeeId, courseTestId);
 
   const binaryString = atob(encryptedBase64);
-
   const bytes = new Uint8Array(binaryString.length);
 
   for (let index = 0; index < binaryString.length; index++) {
     bytes[index] = binaryString.charCodeAt(index);
   }
-
-  /*
-    |--------------------------------------------------------------------------
-    | Create / Overwrite .omr
-    |--------------------------------------------------------------------------
-    */
 
   if (!file.exists) {
     file.create({
@@ -72,20 +91,21 @@ export async function omrPackageExists(path: string | null): Promise<boolean> {
   }
 
   try {
-    const file = new File(path);
-
-    return file.exists;
+    return new File(path).exists;
   } catch {
     return false;
   }
 }
 
 export async function deleteOmrPackage(courseTestId: number): Promise<void> {
-  const file = getOmrPackageFile(courseTestId);
-
-  if (!file.exists) {
-    return;
+  if (!Number.isSafeInteger(courseTestId) || courseTestId <= 0) {
+    throw new Error("A valid course test ID is required.");
   }
 
-  file.delete();
+  const employeeId = requireActiveEmployeeId();
+  const file = getOmrPackageFile(employeeId, courseTestId);
+
+  if (file.exists) {
+    file.delete();
+  }
 }

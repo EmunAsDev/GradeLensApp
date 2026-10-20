@@ -6,6 +6,8 @@ import {
 } from "@/database/scanBatchRepository";
 
 import {
+  getOmrSheetFormat,
+  normalizeOmrQuestionCount,
   reopenOmrReviewQuestion,
   resolveOmrReviewQuestion,
   type OmrLocalReview,
@@ -166,24 +168,17 @@ function validatePendingSubmission(input: SavePendingOmrSubmissionInput): void {
     throw new Error("Student ID number is required.");
   }
 
-  if (
-    input.payload.question_count !== 50 &&
-    input.payload.question_count !== 100
-  ) {
-    throw new Error(
-      `Unsupported local OMR submission size: ${input.payload.question_count}. Expected 50 or 100.`,
-    );
-  }
+  const questionCount = normalizeOmrQuestionCount(input.payload.question_count);
 
-  if (input.payload.format !== String(input.payload.question_count)) {
+  if (input.payload.format !== getOmrSheetFormat(questionCount)) {
     throw new Error(
       `OMR format mismatch. format=${input.payload.format}, question_count=${input.payload.question_count}.`,
     );
   }
 
-  if (input.payload.questions.length !== input.payload.question_count) {
+  if (input.payload.questions.length !== questionCount) {
     throw new Error(
-      `Expected ${input.payload.question_count} stored OMR questions, received ${input.payload.questions.length}.`,
+      `Expected ${questionCount} stored OMR questions, received ${input.payload.questions.length}.`,
     );
   }
 

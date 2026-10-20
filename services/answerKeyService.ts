@@ -10,6 +10,11 @@ import type {
   AnswerKey50,
 } from "@/../modules/gradelens-omr/scoring";
 
+import {
+  getOmrSheetFormat,
+  normalizeOmrQuestionCount,
+} from "@/../modules/gradelens-omr/submission";
+
 import type { OmrQuestionCount } from "@/../modules/gradelens-omr/submission";
 
 function getTemporaryAnswerKeyDirectory(): Directory {
@@ -55,9 +60,9 @@ export async function loadAnswerKey(
     );
   }
 
-  if (questionCount !== 50 && questionCount !== 100) {
-    throw new Error(`Unsupported GradeLens answer-key size: ${questionCount}.`);
-  }
+  const actualQuestionCount = normalizeOmrQuestionCount(questionCount);
+  const sheetFormat = getOmrSheetFormat(actualQuestionCount);
+  const layoutQuestionCount = sheetFormat === "50" ? 50 : 100;
 
   const plaintextPng = await decryptOmrPackage(courseTestId);
 
@@ -65,7 +70,7 @@ export async function loadAnswerKey(
 
   const temporaryFile = new File(
     getTemporaryAnswerKeyDirectory(),
-    `${courseTestId}-${questionCount}-${Date.now()}.png`,
+    `${courseTestId}-${actualQuestionCount}-${Date.now()}.png`,
   );
 
   let normalizedUri: string | null = null;
@@ -87,10 +92,18 @@ export async function loadAnswerKey(
 
     normalizedUri = normalized.normalizedUri;
 
+    // The native reader parses the physical layout but validates only the
+    // actual questions configured for this Course Test.
     const result =
-      questionCount === 50
-        ? await GradeLensOmr.readAnswerKey50(normalized.normalizedUri)
-        : await GradeLensOmr.readAnswerKey100(normalized.normalizedUri);
+      sheetFormat === "50"
+        ? await GradeLensOmr.readAnswerKey50(
+            normalized.normalizedUri,
+            actualQuestionCount,
+          )
+        : await GradeLensOmr.readAnswerKey100(
+            normalized.normalizedUri,
+            actualQuestionCount,
+          );
 
     if (!result.success) {
       const invalidQuestions =
@@ -104,15 +117,15 @@ export async function loadAnswerKey(
       );
     }
 
-    if (result.questionCount !== questionCount) {
+    if (result.questionCount !== layoutQuestionCount) {
       throw new Error(
-        `Answer-key layout mismatch. Expected ${questionCount}, received ${result.questionCount}.`,
+        `Answer-key layout mismatch. Expected ${layoutQuestionCount} physical positions, received ${result.questionCount}.`,
       );
     }
 
-    if (result.answerCount !== questionCount) {
+    if (result.answerCount !== actualQuestionCount) {
       throw new Error(
-        `Expected ${questionCount} answer-key entries, received ${result.answerCount}.`,
+        `Expected ${actualQuestionCount} answer-key entries, received ${result.answerCount}.`,
       );
     }
 
@@ -120,7 +133,7 @@ export async function loadAnswerKey(
 
     for (
       let questionNumber = 1;
-      questionNumber <= questionCount;
+      questionNumber <= actualQuestionCount;
       questionNumber++
     ) {
       const answer = result.answers[String(questionNumber)];

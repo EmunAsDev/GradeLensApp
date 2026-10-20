@@ -1,17 +1,182 @@
 import * as SQLite from "expo-sqlite";
 
-const DATABASE_NAME = "gradelens.db";
+const DATABASE_PREFIX = "gradelens_emp_";
+const DATABASE_SUFFIX = ".db";
 
 let database: SQLite.SQLiteDatabase | null = null;
+let activeEmployeeId: number | null = null;
 
+/*
+|--------------------------------------------------------------------------
+| Database Operation Queue
+|--------------------------------------------------------------------------
+|
+| Prevent overlapping initialization, account switching, and reset
+| operations from changing the active database unexpectedly.
+|
+*/
+
+let databaseOperation: Promise<void> = Promise.resolve();
+
+function enqueueDatabaseOperation<T>(operation: () => Promise<T>): Promise<T> {
+  const nextOperation = databaseOperation.then(operation, operation);
+
+  databaseOperation = nextOperation.then(
+    () => undefined,
+    () => undefined,
+  );
+
+  return nextOperation;
+}
+
+/*
+|--------------------------------------------------------------------------
+| Employee Database Helpers
+|--------------------------------------------------------------------------
+*/
+
+function isValidEmployeeId(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+function assertValidEmployeeId(value: unknown): asserts value is number {
+  if (!isValidEmployeeId(value)) {
+    throw new Error(
+      "A valid authenticated employee ID is required before opening GradeLens local storage.",
+    );
+  }
+}
+
+function getDatabaseName(employeeId: number): string {
+  assertValidEmployeeId(employeeId);
+
+  return `${DATABASE_PREFIX}${employeeId}${DATABASE_SUFFIX}`;
+}
+
+/**
+ * Returns the employee ID belonging to the currently active database.
+ *
+ * Returns null before a faculty database has been selected or after logout.
+ */
+export function getActiveDatabaseEmployeeId(): number | null {
+  return activeEmployeeId;
+}
+
+/**
+ * Returns the database connection for the active faculty account.
+ *
+ * This function deliberately does not create a database automatically.
+ * The authenticated employee must be selected first.
+ */
 export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
-  if (database) {
-    return database;
+  await databaseOperation;
+
+  if (!database || activeEmployeeId === null) {
+    throw new Error(
+      "No faculty database is active. Initialize the database for the logged-in employee first.",
+    );
   }
 
-  database = await SQLite.openDatabaseAsync(DATABASE_NAME);
-
   return database;
+}
+
+/**
+ * Closes the current connection without deleting the database file.
+ */
+async function closeDatabaseInternal(): Promise<void> {
+  const currentDatabase = database;
+
+  database = null;
+  activeEmployeeId = null;
+
+  if (currentDatabase) {
+    await currentDatabase.closeAsync();
+  }
+}
+
+/**
+ * Opens and initializes the database for one faculty account.
+ */
+async function openAndInitializeDatabase(employeeId: number): Promise<void> {
+  assertValidEmployeeId(employeeId);
+
+  /*
+   * If this employee's database is already open, reuse the connection.
+   */
+  if (database && activeEmployeeId === employeeId) {
+    try {
+      await prepareDatabase(database);
+      return;
+    } catch (error) {
+      await closeDatabaseInternal();
+      throw error;
+    }
+  }
+
+  /*
+   * Switching accounts:
+   * close the previous connection but preserve its database file.
+   */
+  await closeDatabaseInternal();
+
+  const nextDatabase = await SQLite.openDatabaseAsync(
+    getDatabaseName(employeeId),
+  );
+
+  database = nextDatabase;
+  activeEmployeeId = employeeId;
+
+  try {
+    await prepareDatabase(nextDatabase);
+  } catch (error) {
+    await closeDatabaseInternal();
+    throw error;
+  }
+}
+
+/*
+|--------------------------------------------------------------------------
+| Initialize Database
+|--------------------------------------------------------------------------
+*/
+
+/**
+ * Opens and prepares the database for the specified employee.
+ *
+ * Examples:
+ *   initializeDatabase(12)
+ *     -> gradelens_emp_12.db
+ *
+ *   initializeDatabase(27)
+ *     -> gradelens_emp_27.db
+ *
+ * If employeeId is omitted, an already-active employee database is required.
+ */
+export async function initializeDatabase(employeeId?: number): Promise<void> {
+  await enqueueDatabaseOperation(async () => {
+    const targetEmployeeId = employeeId ?? activeEmployeeId;
+
+    assertValidEmployeeId(targetEmployeeId);
+
+    await openAndInitializeDatabase(targetEmployeeId);
+  });
+}
+
+/*
+|--------------------------------------------------------------------------
+| Close Database
+|--------------------------------------------------------------------------
+*/
+
+/**
+ * Closes the active employee database during logout.
+ *
+ * The database file and its local data are preserved.
+ */
+export async function closeDatabase(): Promise<void> {
+  await enqueueDatabaseOperation(async () => {
+    await closeDatabaseInternal();
+  });
 }
 
 /*
@@ -19,36 +184,35 @@ export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
 | Development Database Reset
 |--------------------------------------------------------------------------
 |
-| Deletes the complete local GradeLens SQLite database and recreates the
-| current schema.
-|
-| IMPORTANT:
-|
-| This only resets SQLite.
-|
-| It does NOT remove:
-| - authentication token
-| - employee session
-| - device UUID
-| - device RSA keys
-|
 | Development utility only.
 |
+| Deletes only the selected employee's database and recreates its schema.
+| It does not delete other employees' databases, authentication credentials,
+| device UUIDs, or device keys.
+|
 */
-export async function resetDatabase(): Promise<void> {
-  if (database) {
-    await database.closeAsync();
-    database = null;
-  }
 
-  await SQLite.deleteDatabaseAsync(DATABASE_NAME);
+export async function resetDatabase(employeeId?: number): Promise<void> {
+  await enqueueDatabaseOperation(async () => {
+    const targetEmployeeId = employeeId ?? activeEmployeeId;
 
-  await initializeDatabase();
+    assertValidEmployeeId(targetEmployeeId);
+
+    await closeDatabaseInternal();
+
+    await SQLite.deleteDatabaseAsync(getDatabaseName(targetEmployeeId));
+
+    await openAndInitializeDatabase(targetEmployeeId);
+  });
 }
 
-export async function initializeDatabase(): Promise<void> {
-  const db = await getDatabase();
+/*
+|--------------------------------------------------------------------------
+| Prepare Database Schema
+|--------------------------------------------------------------------------
+*/
 
+async function prepareDatabase(db: SQLite.SQLiteDatabase): Promise<void> {
   await db.execAsync(`
     PRAGMA journal_mode = WAL;
 
@@ -236,6 +400,12 @@ export async function initializeDatabase(): Promise<void> {
   await createOmrSubmissionIndexes(db);
 }
 
+/*
+|--------------------------------------------------------------------------
+| Course Test Schema Upgrade
+|--------------------------------------------------------------------------
+*/
+
 async function upgradeCourseTestSchema(
   db: SQLite.SQLiteDatabase,
 ): Promise<void> {
@@ -245,7 +415,10 @@ async function upgradeCourseTestSchema(
 
   const existing = new Set(columns.map((column) => column.name));
 
-  const additions: Array<{ name: string; sql: string }> = [
+  const additions: Array<{
+    name: string;
+    sql: string;
+  }> = [
     {
       name: "question_count",
       sql: "ALTER TABLE course_tests ADD COLUMN question_count INTEGER",
@@ -287,6 +460,12 @@ async function upgradeCourseTestSchema(
   }
 }
 
+/*
+|--------------------------------------------------------------------------
+| OMR Submission Schema Upgrade
+|--------------------------------------------------------------------------
+*/
+
 async function upgradeOmrSubmissionSchema(
   db: SQLite.SQLiteDatabase,
 ): Promise<void> {
@@ -296,7 +475,10 @@ async function upgradeOmrSubmissionSchema(
 
   let existing = new Set(columns.map((column) => column.name));
 
-  const additions: Array<{ name: string; sql: string }> = [
+  const additions: Array<{
+    name: string;
+    sql: string;
+  }> = [
     {
       name: "scan_batch_uuid",
       sql: "ALTER TABLE omr_submissions ADD COLUMN scan_batch_uuid TEXT",
@@ -341,12 +523,18 @@ async function upgradeOmrSubmissionSchema(
     }
   }
 
+  /*
+   * Backfill captured_at for existing submissions.
+   */
   await db.runAsync(`
     UPDATE omr_submissions
     SET captured_at = created_at
     WHERE captured_at IS NULL
   `);
 
+  /*
+   * Recalculate the local review flag from saved review question numbers.
+   */
   await db.runAsync(`
     UPDATE omr_submissions
     SET requires_review =
@@ -364,6 +552,9 @@ async function upgradeOmrSubmissionSchema(
 
   existing = new Set(columns.map((column) => column.name));
 
+  /*
+   * Detect the old authorized-rescan schema.
+   */
   const legacyColumns = [
     "attempt_number",
     "submission_type",
@@ -380,9 +571,11 @@ async function upgradeOmrSubmissionSchema(
   }
 
   /*
-   * The old authorized-clarification architecture was removed. Rebuild the
-   * table once so existing local evidence is preserved while those obsolete
-   * columns and their old UNIQUE(sheet_uuid, attempt_number) rule disappear.
+   * The old authorized-clarification architecture was removed.
+   *
+   * Rebuild the table once so existing local evidence is preserved while
+   * obsolete columns and the old UNIQUE(sheet_uuid, attempt_number) rule
+   * are removed.
    */
   await db.withTransactionAsync(async () => {
     await db.execAsync(`
@@ -494,6 +687,12 @@ async function upgradeOmrSubmissionSchema(
     `);
   });
 }
+
+/*
+|--------------------------------------------------------------------------
+| OMR Submission Indexes
+|--------------------------------------------------------------------------
+*/
 
 async function createOmrSubmissionIndexes(
   db: SQLite.SQLiteDatabase,
