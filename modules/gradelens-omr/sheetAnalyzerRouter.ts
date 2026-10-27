@@ -1,5 +1,7 @@
 import GradeLensOmr from "./index";
 
+import { getOmrSheetFormat } from "./submission";
+
 import type {
   AnalyzeQuestionsResultLike,
   OmrQuestionCount,
@@ -8,19 +10,25 @@ import type {
 /*
  * Single authoritative routing point.
  *
- * Paper type is NOT guessed from pixels.
+ * QR -> Course Test -> question_count -> physical sheet format
  *
- * QR -> Course Test -> local question_count -> exact native analyzer
+ * 1–50 questions  -> 50-item sheet analyzer
+ * 51–100 questions -> 100-item sheet analyzer
  */
 export async function analyzeQuestionsForPaper(
   normalizedImageUri: string,
   questionCount: OmrQuestionCount,
 ): Promise<AnalyzeQuestionsResultLike> {
-  switch (questionCount) {
-    case 50:
-      return await GradeLensOmr.analyze50Questions(normalizedImageUri);
+  const format = getOmrSheetFormat(questionCount);
 
-    case 100:
-      return await GradeLensOmr.analyze100Questions(normalizedImageUri);
+  switch (format) {
+    case "50":
+      return GradeLensOmr.analyze50Questions(normalizedImageUri);
+
+    case "100":
+      return GradeLensOmr.analyze100Questions(normalizedImageUri);
+
+    default:
+      throw new Error(`Unsupported OMR sheet format: ${String(format)}`);
   }
 }

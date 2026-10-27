@@ -184,7 +184,7 @@ export function scoreOmrSubmission(
      * (ambiguous/unreadable), so an invalid machine result cannot be manually
      * rescued through the pre-sync review workflow.
      */
-    if (machineQuestion?.status === "invalid") {
+    if (String(machineQuestion?.status) === "invalid") {
       answered++;
       incorrect++;
       invalid++;
