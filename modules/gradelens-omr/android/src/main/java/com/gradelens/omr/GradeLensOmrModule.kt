@@ -65,6 +65,20 @@ class GradeLensOmrModule : Module() {
         |
         */
 
+        /*
+         * The four detected markers cover only part of the physical sheet:
+         * x = 9.0..139.5 mm and y = 51.0..201.0 mm.
+         *
+         * Their quadrilateral is about 62.8% of the complete sheet area. When
+         * estimating how much of the captured photo is occupied by the paper,
+         * correct the marker-quad area by this fraction. Without this correction,
+         * a 0.22 threshold on the marker quad effectively requires the paper to
+         * occupy about 35% of the photo and can reject usable captures.
+         */
+        private const val MARKER_REGION_AREA_FRACTION_OF_SHEET =
+            (130.5 * 150.0) / (148.5 * 210.0)
+
+        // Estimated fraction of the captured image occupied by the full sheet.
         private const val CAPTURE_MIN_SHEET_AREA_RATIO =
             0.22
 
@@ -6430,7 +6444,10 @@ class GradeLensOmrModule : Module() {
             min(leftHeight, rightHeight) /
                 max(leftHeight, rightHeight).coerceAtLeast(1.0)
 
-        val sheetArea =
+        // This polygon is the region bounded by the marker outer corners,
+        // not the full paper boundary. Estimate full-sheet area from it using
+        // the known fraction of the paper occupied by this marker region.
+        val markerRegionArea =
             polygonArea(
                 listOf(
                     topLeft,
@@ -6444,9 +6461,21 @@ class GradeLensOmrModule : Module() {
             image.cols().toDouble() *
                 image.rows().toDouble()
 
-        val sheetAreaRatio =
+        val markerRegionAreaRatio =
             if (imageArea > 0.0) {
-                sheetArea / imageArea
+                markerRegionArea / imageArea
+            } else {
+                0.0
+            }
+
+        val sheetAreaRatio =
+            if (
+                MARKER_REGION_AREA_FRACTION_OF_SHEET > 0.0
+            ) {
+                (
+                    markerRegionAreaRatio /
+                        MARKER_REGION_AREA_FRACTION_OF_SHEET
+                    ).coerceIn(0.0, 1.0)
             } else {
                 0.0
             }

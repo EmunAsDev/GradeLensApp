@@ -327,6 +327,7 @@ export type InterpretedQuestionBubble = {
 export type InterpretedQuestionResult = {
   question: number;
   answer: string | null;
+  selectedChoices: string[];
   status: QuestionInterpretationStatus;
   qualityStatus: QuestionQualityStatus;
   needsReview: boolean;
@@ -440,6 +441,13 @@ export type Analyze50QuestionsResult = {
  */
 export type Analyze100QuestionsResult = Analyze50QuestionsResult;
 
+export type PrepareYoloProposalsResult = {
+  success: boolean;
+  questionCount: number;
+  proposalCount: number;
+  confidenceThreshold: number;
+};
+
 export type ReadSheetQr50Result = {
   success: boolean;
   rawValue: string;
@@ -516,6 +524,11 @@ type GradeLensOmrModule = {
     normalizedImageUri: string,
     actualQuestionCount: number,
   ): Promise<ReadAnswerKey100Result>;
+
+  prepareYoloProposals(
+    normalizedImageUri: string,
+    questionCount: 50 | 100,
+  ): Promise<PrepareYoloProposalsResult>;
 
   analyze50Questions(
     normalizedImageUri: string,

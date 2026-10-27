@@ -455,7 +455,11 @@ export function buildOmrSubmissionPayload(
         selected_with_correction: countStatus("selected_with_correction"),
         crossed_without_replacement: countStatus("crossed_without_replacement"),
         multiple: countStatus("multiple"),
-        invalid: countStatus("invalid"),
+        // Invalid marking is tracked through invalid bubble choices; it is
+        // not one of the question-level interpretation statuses.
+        invalid: questions.filter(
+          (question) => question.invalid_choices.length > 0,
+        ).length,
         ambiguous: countStatus("ambiguous"),
         unreadable: countStatus("unreadable"),
       },
