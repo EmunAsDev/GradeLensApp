@@ -30,6 +30,7 @@ import { getCourseTest } from "@/database/courseTestRepository";
 import { getCourseTestStudentByStudentId } from "@/database/courseTestStudentRepository";
 import {
   DuplicateOmrSubmissionError,
+  removeDraftOmrSubmission,
   savePendingOmrSubmission,
 } from "@/database/omrSubmissionRepository";
 
@@ -44,6 +45,7 @@ type ScanStage = "idle" | "capturing" | "normalizing" | "processing" | "done";
 type SavedScanDisposition = "ready" | "needs_review";
 
 type ScanResult = {
+  submissionUuid: string;
   studentName: string;
   studentId: string;
   score: number;
@@ -170,6 +172,33 @@ export default function ScanScreen() {
 
   const handleScanNext = () => {
     resetScanner();
+  };
+
+  const handleReviewNow = () => {
+    if (!scanResult) {
+      return;
+    }
+
+    router.push({
+      pathname: "/batch/review/[submissionUuid]",
+      params: { submissionUuid: scanResult.submissionUuid },
+    });
+  };
+
+  const handleRemoveAndRetake = async () => {
+    if (!scanResult) {
+      return;
+    }
+
+    try {
+      await removeDraftOmrSubmission(scanResult.submissionUuid);
+      resetScanner();
+    } catch {
+      Alert.alert(
+        "Couldn't Remove Scan",
+        "This scan could not be removed. If it has already been added to a batch or submitted, remove it from Batch instead.",
+      );
+    }
   };
 
   const handleFinish = () => {
@@ -469,6 +498,7 @@ export default function ScanScreen() {
           .sort((a, b) => a - b);
 
         setScanResult({
+          submissionUuid: qr.s,
           studentName: matchedStudent.name ?? studentIdResult.studentId,
           studentId: studentIdResult.studentId,
           score: tentativeScore.score,
@@ -716,58 +746,55 @@ export default function ScanScreen() {
 
             {scanStage === "done" && scanResult ? (
               <View style={styles.resultContent}>
-                <Text style={styles.resultName}>{scanResult.studentName}</Text>
+                <View style={styles.compactResultHeader}>
+                  <View style={styles.compactStudentBlock}>
+                    <Text style={styles.resultName} numberOfLines={2}>
+                      {scanResult.studentName}
+                    </Text>
+                    {scanResult.studentName !== scanResult.studentId ? (
+                      <Text style={styles.resultStudentId}>
+                        Student ID {scanResult.studentId}
+                      </Text>
+                    ) : null}
+                  </View>
 
-                {scanResult.studentName !== scanResult.studentId ? (
-                  <Text style={styles.resultStudentId}>
-                    Student ID {scanResult.studentId}
+                  <View style={styles.compactScoreBlock}>
+                    <Text style={styles.resultScore}>
+                      {scanResult.score}/{scanResult.totalQuestions}
+                    </Text>
+                    <Text style={styles.resultLabel}>Tentative Score</Text>
+                  </View>
+                </View>
+
+                <View
+                  style={[
+                    styles.compactStatusNotice,
+                    scanResult.disposition === "needs_review"
+                      ? styles.compactStatusNeedsReview
+                      : styles.compactStatusReady,
+                  ]}
+                >
+                  <Text style={styles.compactStatusTitle}>
+                    {scanResult.disposition === "needs_review"
+                      ? "Needs Review"
+                      : "Ready"}
                   </Text>
-                ) : null}
-
-                <Text style={styles.resultScore}>
-                  {scanResult.score} / {scanResult.totalQuestions}
-                </Text>
-
-                <Text style={styles.resultLabel}>Tentative Score</Text>
-
-                {scanResult.disposition === "needs_review" ? (
-                  <View style={styles.reviewNotice}>
-                    <Text style={styles.reviewNoticeTitle}>Needs Review</Text>
-
-                    <Text style={styles.reviewNoticeText}>
-                      Questions: {scanResult.reviewQuestionNumbers.join(", ")}
-                    </Text>
-
-                    <Text style={styles.reviewNoticeHint}>
-                      The scan is saved and may still be submitted in Batch.
-                      Laravel will hold the final academic score until these
-                      questions are reviewed.
-                    </Text>
-                  </View>
-                ) : (
-                  <View style={styles.readyNotice}>
-                    <Text style={styles.readyNoticeTitle}>Ready</Text>
-
-                    <Text style={styles.readyNoticeText}>
-                      No question-level OMR review is required.
-                    </Text>
-                  </View>
-                )}
+                  <Text style={styles.compactStatusText}>
+                    {scanResult.disposition === "needs_review"
+                      ? `Questions: ${scanResult.reviewQuestionNumbers.join(", ")}`
+                      : "No question-level OMR review is required."}
+                  </Text>
+                </View>
 
                 {scanResult.invalidQuestionNumbers.length > 0 ? (
-                  <View style={styles.invalidNotice}>
-                    <Text style={styles.invalidNoticeTitle}>
-                      Invalid Marking
+                  <View style={styles.compactInvalidNotice}>
+                    <Text style={styles.compactInvalidText}>
+                      Invalid marking: Q
+                      {scanResult.invalidQuestionNumbers.join(", Q")}
                     </Text>
-
-                    <Text style={styles.invalidNoticeText}>
-                      Questions: {scanResult.invalidQuestionNumbers.join(", ")}
-                    </Text>
-
-                    <Text style={styles.invalidNoticeHint}>
-                      GradeLens understood these marks, but they did not meet
-                      the configured shading rule. They count as zero and do not
-                      require teacher review.
+                    <Text style={styles.compactInvalidHint}>
+                      These marks count as zero and do not require teacher
+                      review.
                     </Text>
                   </View>
                 ) : null}
@@ -776,28 +803,62 @@ export default function ScanScreen() {
                   Saved locally and waiting in Batch.
                 </Text>
 
+                <View style={styles.compactDivider} />
+
                 <View style={styles.resultActions}>
-                  <Pressable
-                    accessibilityRole="button"
-                    onPress={handleScanNext}
-                    style={({ pressed }) => [
-                      styles.scanNextButton,
-                      pressed && styles.resultButtonPressed,
-                    ]}
-                  >
-                    <Text style={styles.scanNextButtonText}>Scan Next</Text>
-                  </Pressable>
+                  {scanResult.disposition === "needs_review" ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={handleReviewNow}
+                      style={({ pressed }) => [
+                        styles.compactSecondaryButton,
+                        pressed && styles.resultButtonPressed,
+                      ]}
+                    >
+                      <Text style={styles.compactSecondaryButtonText}>
+                        Review Now
+                      </Text>
+                    </Pressable>
+                  ) : null}
 
                   <Pressable
                     accessibilityRole="button"
-                    onPress={handleFinish}
+                    onPress={handleRemoveAndRetake}
                     style={({ pressed }) => [
-                      styles.finishButton,
+                      styles.compactRemoveButton,
                       pressed && styles.resultButtonPressed,
                     ]}
                   >
-                    <Text style={styles.finishButtonText}>Finish</Text>
+                    <Text style={styles.compactRemoveButtonText}>
+                      Remove & Retake
+                    </Text>
                   </Pressable>
+
+                  <View style={styles.compactPrimaryActions}>
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={handleScanNext}
+                      style={({ pressed }) => [
+                        styles.scanNextButton,
+                        styles.compactActionButton,
+                        pressed && styles.resultButtonPressed,
+                      ]}
+                    >
+                      <Text style={styles.scanNextButtonText}>Scan Next</Text>
+                    </Pressable>
+
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={handleFinish}
+                      style={({ pressed }) => [
+                        styles.finishButton,
+                        styles.compactActionButton,
+                        pressed && styles.resultButtonPressed,
+                      ]}
+                    >
+                      <Text style={styles.finishButtonText}>Finish</Text>
+                    </Pressable>
+                  </View>
                 </View>
               </View>
             ) : (
@@ -1278,11 +1339,129 @@ const styles = StyleSheet.create({
     color: "#A1A1AA",
   },
 
+  compactResultHeader: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: theme.spacing.md,
+  },
+
+  compactStudentBlock: {
+    flex: 1,
+    alignItems: "flex-start",
+  },
+
+  compactScoreBlock: {
+    alignItems: "flex-end",
+  },
+
+  compactStatusNotice: {
+    width: "100%",
+    marginTop: theme.spacing.md,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    borderWidth: 1,
+    borderRadius: 10,
+  },
+
+  compactStatusNeedsReview: {
+    borderColor: "rgba(242, 194, 49, 0.55)",
+    backgroundColor: "rgba(242, 194, 49, 0.10)",
+  },
+
+  compactStatusReady: {
+    borderColor: "rgba(255, 255, 255, 0.16)",
+    backgroundColor: "rgba(255, 255, 255, 0.06)",
+  },
+
+  compactStatusTitle: {
+    ...theme.typography.bodyStrong,
+    textAlign: "center",
+    color: theme.colors.textInverse,
+  },
+
+  compactStatusText: {
+    marginTop: 3,
+    ...theme.typography.caption,
+    textAlign: "center",
+    color: "#D4D4D8",
+  },
+
+  compactInvalidNotice: {
+    width: "100%",
+    marginTop: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    borderRadius: 10,
+    backgroundColor: "rgba(255, 255, 255, 0.07)",
+  },
+
+  compactInvalidText: {
+    ...theme.typography.bodyStrong,
+    textAlign: "center",
+    color: theme.colors.textInverse,
+  },
+
+  compactInvalidHint: {
+    marginTop: 3,
+    ...theme.typography.caption,
+    textAlign: "center",
+    color: "#D4D4D8",
+  },
+
+  compactDivider: {
+    width: "100%",
+    height: StyleSheet.hairlineWidth,
+    marginTop: theme.spacing.md,
+    backgroundColor: "rgba(255, 255, 255, 0.18)",
+  },
+
+  compactPrimaryActions: {
+    width: "100%",
+    flexDirection: "row",
+    gap: theme.spacing.sm,
+  },
+
+  compactActionButton: {
+    flex: 1,
+  },
+
+  compactSecondaryButton: {
+    minHeight: 42,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: theme.spacing.md,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.20)",
+    borderRadius: 10,
+    backgroundColor: "rgba(255, 255, 255, 0.06)",
+  },
+
+  compactSecondaryButtonText: {
+    ...theme.typography.bodyStrong,
+    color: theme.colors.textInverse,
+  },
+
+  compactRemoveButton: {
+    minHeight: 42,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: theme.spacing.md,
+    borderWidth: 1,
+    borderColor: "rgba(248, 113, 113, 0.55)",
+    borderRadius: 10,
+    backgroundColor: "rgba(248, 113, 113, 0.10)",
+  },
+
+  compactRemoveButtonText: {
+    ...theme.typography.bodyStrong,
+    color: "#FCA5A5",
+  },
+
   resultActions: {
     width: "100%",
-
-    marginTop: theme.spacing.xxl,
-
+    marginTop: theme.spacing.md,
     gap: theme.spacing.sm,
   },
 

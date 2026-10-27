@@ -4,7 +4,7 @@
     "slug": "gradelens",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/gradelensdisplaylogo.png",
+    "icon": "./assets/images/gradelensdisplaylogo512.png",
     "scheme": "gradelens",
     "userInterfaceStyle": "automatic",
     "ios": {
@@ -17,7 +17,7 @@
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#FFFFFF",
-        "foregroundImage": "./assets/images/gradelensdisplaylogo.png"
+        "foregroundImage": "./assets/images/gradelensdisplaylogo512.png"
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.um.gradelens",
@@ -33,12 +33,12 @@
         "expo-splash-screen",
         {
           "backgroundColor": "#FFFFFF",
-          "image": "./assets/images/gradelenslogo.png",
+          "image": "./assets/images/gradelensdisplaylogo512.png",
           "imageWidth": 220,
           "resizeMode": "contain",
           "dark": {
             "backgroundColor": "#FFFFFF",
-            "image": "./assets/images/gradelenslogo.png"
+            "image": "./assets/images/gradelensdisplaylogo512.png"
           }
         }
       ],
