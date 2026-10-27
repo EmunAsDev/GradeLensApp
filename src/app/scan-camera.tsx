@@ -159,6 +159,7 @@ export default function ScanScreen() {
   const [scanStage, setScanStage] = useState<ScanStage>("idle");
   const [capturedImageUri, setCapturedImageUri] = useState<string | null>(null);
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
+  const [flashEnabled, setFlashEnabled] = useState(false);
 
   const insets = useSafeAreaInsets();
 
@@ -642,6 +643,7 @@ export default function ScanScreen() {
         ref={cameraRef}
         style={StyleSheet.absoluteFill}
         facing="back"
+        enableTorch={flashEnabled}
         animateShutter
       />
 
@@ -679,6 +681,26 @@ export default function ScanScreen() {
             ]}
           >
             <Text style={styles.closeButtonText}>×</Text>
+          </Pressable>
+
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={
+              flashEnabled ? "Turn flash off" : "Turn flash on"
+            }
+            accessibilityState={{ checked: flashEnabled }}
+            disabled={isBusy}
+            onPress={() => setFlashEnabled((enabled) => !enabled)}
+            style={({ pressed }) => [
+              styles.flashButton,
+              flashEnabled && styles.flashButtonActive,
+              pressed && !isBusy && styles.closeButtonPressed,
+              isBusy && styles.captureDisabled,
+            ]}
+          >
+            <Text style={styles.flashButtonText}>
+              {flashEnabled ? "⚡ On" : "⚡ Off"}
+            </Text>
           </Pressable>
 
           <View style={styles.topInstruction}>
@@ -927,6 +949,34 @@ const styles = StyleSheet.create({
 
   closeButtonPressed: {
     opacity: 0.72,
+  },
+
+  flashButton: {
+    position: "absolute",
+    right: 0,
+    top: 0,
+    zIndex: 4,
+    minWidth: 66,
+    height: 42,
+    paddingHorizontal: theme.spacing.md,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 21,
+    backgroundColor: "rgba(0, 0, 0, 0.58)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.24)",
+  },
+
+  flashButtonActive: {
+    backgroundColor: "rgba(175, 37, 50, 0.92)",
+    borderColor: "rgba(255, 255, 255, 0.5)",
+  },
+
+  flashButtonText: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "700",
+    color: theme.colors.textInverse,
   },
 
   closeButtonText: {

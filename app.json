@@ -4,11 +4,11 @@
     "slug": "gradelens",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/gradelensdisplaylogo512.png",
+    "icon": "./assets/images/gradelensAppIcon.png",
     "scheme": "gradelens",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/images/gradelensdisplaylogo.png",
+      "icon": "./assets/images/gradelensAppIcon.png",
       "bundleIdentifier": "com.gradelens.app",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
