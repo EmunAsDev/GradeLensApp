@@ -79,11 +79,14 @@ class GradeLensOmrModule : Module() {
             (130.5 * 150.0) / (148.5 * 210.0)
 
         // Estimated fraction of the captured image occupied by the full sheet.
+        // Step 1 trial values: allow a smaller detected sheet/marker region
+        // while still requiring all four markers and acceptable perspective.
+        // Validate these values against real classroom captures before release.
         private const val CAPTURE_MIN_SHEET_AREA_RATIO =
-            0.22
+            0.18
 
         private const val CAPTURE_MIN_MARKER_SIDE_PX =
-            18.0
+            14.0
 
         private const val CAPTURE_MIN_OPPOSITE_EDGE_RATIO =
             0.45

@@ -386,7 +386,8 @@ export function buildOmrSubmissionPayload(
     if (
       question.needsReview ||
       question.qualityStatus === "review" ||
-      question.qualityStatus === "reject"
+      question.qualityStatus === "reject" ||
+      question.invalidChoices.length > 0
     ) {
       reviewQuestionNumbers.push(question.question);
     }

@@ -273,10 +273,28 @@ export default function ScanScreen() {
         }
 
         normalizedImageUri = normalized.normalizedUri;
-      } catch {
+      } catch (error) {
+        // Keep the native capture-quality reason so the user can correct the
+        // actual problem instead of receiving the same generic message.
+        const reason = error instanceof Error ? error.message : String(error);
+
+        if (reason.includes("CAPTURE_TOO_FAR")) {
+          throw new ScanFlowError(
+            "Move Closer to the Sheet",
+            "The answer sheet is too small in the camera frame. Move the phone closer while keeping the whole sheet and all four corner markers visible.",
+          );
+        }
+
+        if (reason.includes("CAPTURE_TOO_SKEWED")) {
+          throw new ScanFlowError(
+            "Straighten the Sheet",
+            "The sheet is too skewed for reliable correction. Hold the phone more directly above the paper and keep all four corner markers visible.",
+          );
+        }
+
         throw new ScanFlowError(
           "Sheet Not Detected",
-          "GradeLens could not detect the answer sheet. Make sure the whole sheet and all four corner markers are visible, then try again.",
+          "GradeLens could not detect all four corner markers. Keep the whole sheet visible, improve the lighting, and try again.",
         );
       }
 
@@ -306,10 +324,28 @@ export default function ScanScreen() {
         }
 
         qr = parseSheetQrPayload(qrResult.rawValue);
-      } catch {
+      } catch (error) {
+        // Separate a QR that could not be decoded from a decoded QR whose
+        // contents are not a valid GradeLens sheet payload.
+        const reason = error instanceof Error ? error.message : String(error);
+
+        const payloadProblem =
+          reason.includes("GradeLens JSON") ||
+          reason.includes("QR payload is invalid") ||
+          reason.includes("Unsupported answer-sheet QR version") ||
+          reason.includes("valid course test ID") ||
+          reason.includes("valid sheet UUID");
+
+        if (payloadProblem) {
+          throw new ScanFlowError(
+            "Invalid Answer-Sheet QR",
+            "The QR code was detected, but its contents are not a valid GradeLens answer-sheet code. Use the answer sheet generated for this course test.",
+          );
+        }
+
         throw new ScanFlowError(
           "Couldn't Read QR Code",
-          "The QR code on this sheet couldn't be read. Retake the photo with the QR code fully visible and in focus.",
+          "GradeLens couldn't decode the answer-sheet QR code. Keep it fully visible, avoid glare, and hold the phone steady and in focus before trying again.",
         );
       }
 
@@ -815,8 +851,8 @@ export default function ScanScreen() {
                       {scanResult.invalidQuestionNumbers.join(", Q")}
                     </Text>
                     <Text style={styles.compactInvalidHint}>
-                      These marks count as zero and do not require teacher
-                      review.
+                      These marks need teacher review before this paper is ready
+                      to sync.
                     </Text>
                   </View>
                 ) : null}
